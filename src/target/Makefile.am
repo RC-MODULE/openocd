@@ -114,94 +114,13 @@ NDS32_SRC = \
 	%D%/nds32_aice.c
 
 INTEL_IA32_SRC = \
-<<<<<<< HEAD
-	quark_x10xx.c \
-	lakemont.c \
-	x86_32_common.c
-
-PPC476FS_SRC = \
-	ppc476fs.c
-
-noinst_HEADERS = \
-	algorithm.h \
-	arm.h \
-	arm_dpm.h \
-	arm_jtag.h \
-	arm_adi_v5.h \
-	arm_disassembler.h \
-	arm_opcodes.h \
-	arm_simulator.h \
-	arm_semihosting.h \
-	arm7_9_common.h \
-	arm7tdmi.h \
-	arm720t.h \
-	arm9tdmi.h \
-	arm920t.h \
-	arm926ejs.h \
-	arm966e.h \
-	arm946e.h \
-	arm11.h \
-	arm11_dbgtap.h \
-	armv4_5.h \
-	armv4_5_mmu.h \
-	armv4_5_cache.h \
-	armv7a.h \
-	armv7m.h \
-	armv7m_trace.h \
-	avrt.h \
-	dsp563xx.h \
-	dsp563xx_once.h \
-	dsp5680xx.h \
-	breakpoints.h \
-	cortex_m.h \
-	cortex_a.h \
-	embeddedice.h \
-	etb.h \
-	etm.h \
-	etm_dummy.h \
-	image.h \
-	mips32.h \
-	mips_m4k.h \
-	mips_ejtag.h \
-	mips32_pracc.h \
-	mips32_dmaacc.h \
-	oocd_trace.h \
-	register.h \
-	target.h \
-	target_type.h \
-	trace.h \
-	target_request.h \
-	trace.h \
-	xscale.h \
-	smp.h \
-	avr32_ap7k.h \
-	avr32_jtag.h \
-	avr32_mem.h \
-	avr32_regs.h \
-	nds32.h \
-	nds32_cmd.h \
-	nds32_disassembler.h \
-	nds32_edm.h \
-	nds32_insn.h \
-	nds32_reg.h \
-	nds32_tlb.h \
-	nds32_v2.h \
-	nds32_v3_common.h \
-	nds32_v3.h \
-	nds32_v3m.h \
-	nds32_aice.h \
-	lakemont.h \
-	x86_32_common.h
-
-ocddatadir = $(pkglibdir)
-nobase_dist_ocddata_DATA =
-
-MAINTAINERCLEANFILES = $(srcdir)/Makefile.in
-=======
 	%D%/quark_x10xx.c \
 	%D%/quark_d20xx.c \
 	%D%/lakemont.c \
 	%D%/x86_32_common.c
+
+PPC476FS_SRC = \
+	%D%/ppc476fs.c
 
 %C%_libtarget_la_SOURCES += \
 	%D%/algorithm.h \
@@ -277,4 +196,3 @@ MAINTAINERCLEANFILES = $(srcdir)/Makefile.in
 	%D%/x86_32_common.h
 
 include %D%/openrisc/Makefile.am
->>>>>>> v0.10.0
