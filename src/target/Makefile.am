@@ -1,31 +1,15 @@
-include $(top_srcdir)/common.mk
-
 if OOCD_TRACE
-OOCD_TRACE_FILES = oocd_trace.c
+OOCD_TRACE_FILES = %D%/oocd_trace.c
 else
 OOCD_TRACE_FILES =
 endif
 
-SUBDIRS = openrisc
-libtarget_la_LIBADD = $(top_builddir)/src/target/openrisc/libopenrisc.la
+%C%_libtarget_la_LIBADD = %D%/openrisc/libopenrisc.la
 
-BIN2C		= $(top_srcdir)/src/helper/bin2char.sh
+STARTUP_TCL_SRCS += %D%/startup.tcl
 
-DEBUG_HANDLER	= $(srcdir)/xscale/debug_handler.bin
-EXTRA_DIST = \
-	startup.tcl \
-	$(wildcard $(srcdir)/xscale/*)
-
-DEBUG_HEADER	= xscale_debug.inc
-BUILT_SOURCES = $(DEBUG_HEADER)
-CLEANFILES = $(DEBUG_HEADER)
-
-$(DEBUG_HEADER): $(DEBUG_HANDLER) $(BIN2C)
-	$(BIN2C) < $< > $@ || { rm -f $@; false; }
-
-METASOURCES = AUTO
-noinst_LTLIBRARIES = libtarget.la
-libtarget_la_SOURCES = \
+noinst_LTLIBRARIES += %D%/libtarget.la
+%C%_libtarget_la_SOURCES = \
 	$(TARGET_CORE_SRC) \
 	$(ARM_DEBUG_SRC) \
 	$(ARMV4_5_SRC) \
@@ -37,96 +21,100 @@ libtarget_la_SOURCES = \
 	$(NDS32_SRC) \
 	$(INTEL_IA32_SRC) \
 	$(PPC476FS_SRC) \
-	avrt.c \
-	dsp563xx.c \
-	dsp563xx_once.c \
-	dsp5680xx.c \
-	hla_target.c
+	%D%/avrt.c \
+	%D%/dsp563xx.c \
+	%D%/dsp563xx_once.c \
+	%D%/dsp5680xx.c \
+	%D%/hla_target.c
 
 TARGET_CORE_SRC = \
-	algorithm.c \
-	register.c \
-	image.c \
-	breakpoints.c \
-	target.c \
-	target_request.c \
-	testee.c \
-	smp.c
+	%D%/algorithm.c \
+	%D%/register.c \
+	%D%/image.c \
+	%D%/breakpoints.c \
+	%D%/target.c \
+	%D%/target_request.c \
+	%D%/testee.c \
+	%D%/smp.c
 
 ARMV4_5_SRC = \
-	armv4_5.c \
-	armv4_5_mmu.c \
-	armv4_5_cache.c \
+	%D%/armv4_5.c \
+	%D%/armv4_5_mmu.c \
+	%D%/armv4_5_cache.c \
 	$(ARM7_9_SRC)
 
 ARM7_9_SRC = \
-	arm7_9_common.c \
-	arm7tdmi.c \
-	arm720t.c \
-	arm9tdmi.c \
-	arm920t.c \
-	arm966e.c \
-	arm946e.c \
-	arm926ejs.c \
-	feroceon.c
+	%D%/arm7_9_common.c \
+	%D%/arm7tdmi.c \
+	%D%/arm720t.c \
+	%D%/arm9tdmi.c \
+	%D%/arm920t.c \
+	%D%/arm966e.c \
+	%D%/arm946e.c \
+	%D%/arm926ejs.c \
+	%D%/feroceon.c
 
 ARM_MISC_SRC = \
-	fa526.c \
-	xscale.c
+	%D%/fa526.c \
+	%D%/xscale.c
 
 ARMV6_SRC = \
-	arm11.c \
-	arm11_dbgtap.c
+	%D%/arm11.c \
+	%D%/arm11_dbgtap.c
 
 ARMV7_SRC = \
-	armv7m.c \
-	armv7m_trace.c \
-	cortex_m.c \
-	armv7a.c \
-	cortex_a.c
+	%D%/armv7m.c \
+	%D%/armv7m_trace.c \
+	%D%/cortex_m.c \
+	%D%/armv7a.c \
+	%D%/cortex_a.c \
+	%D%/ls1_sap.c
 
 ARM_DEBUG_SRC = \
-	arm_dpm.c \
-	arm_jtag.c \
-	arm_disassembler.c \
-	arm_simulator.c \
-	arm_semihosting.c \
-	arm_adi_v5.c \
-	adi_v5_jtag.c \
-	adi_v5_swd.c \
-	embeddedice.c \
-	trace.c \
-	etb.c \
-	etm.c \
+	%D%/arm_dpm.c \
+	%D%/arm_jtag.c \
+	%D%/arm_disassembler.c \
+	%D%/arm_simulator.c \
+	%D%/arm_semihosting.c \
+	%D%/arm_adi_v5.c \
+	%D%/armv7a_cache.c \
+	%D%/armv7a_cache_l2x.c \
+	%D%/adi_v5_jtag.c \
+	%D%/adi_v5_swd.c \
+	%D%/embeddedice.c \
+	%D%/trace.c \
+	%D%/etb.c \
+	%D%/etm.c \
 	$(OOCD_TRACE_FILES) \
-	etm_dummy.c
+	%D%/etm_dummy.c
 
 AVR32_SRC = \
-	avr32_ap7k.c \
-	avr32_jtag.c \
-	avr32_mem.c \
-	avr32_regs.c
+	%D%/avr32_ap7k.c \
+	%D%/avr32_jtag.c \
+	%D%/avr32_mem.c \
+	%D%/avr32_regs.c
 
 MIPS32_SRC = \
-	mips32.c \
-	mips_m4k.c \
-	mips32_pracc.c \
-	mips32_dmaacc.c \
-	mips_ejtag.c
+	%D%/mips32.c \
+	%D%/mips_m4k.c \
+	%D%/mips32_pracc.c \
+	%D%/mips32_dmaacc.c \
+	%D%/mips_ejtag.c
 
 NDS32_SRC = \
-	nds32.c \
-	nds32_reg.c \
-	nds32_cmd.c \
-	nds32_disassembler.c \
-	nds32_tlb.c \
-	nds32_v2.c \
-	nds32_v3_common.c \
-	nds32_v3.c \
-	nds32_v3m.c \
-	nds32_aice.c
+	%D%/nds32.c \
+	%D%/nds32_reg.c \
+	%D%/nds32_cmd.c \
+	%D%/nds32_disassembler.c \
+	%D%/nds32_tlb.c \
+	%D%/nds32_v2.c \
+	%D%/nds32_v3_common.c \
+	%D%/nds32_v3.c \
+	%D%/nds32_v3m.c \
+	%D%/nds32_aice.c
 
 INTEL_IA32_SRC = \
+<<<<<<< HEAD
 	quark_x10xx.c \
 	lakemont.c \
 	x86_32_common.c
@@ -209,3 +197,84 @@ ocddatadir = $(pkglibdir)
 nobase_dist_ocddata_DATA =
 
 MAINTAINERCLEANFILES = $(srcdir)/Makefile.in
+=======
+	%D%/quark_x10xx.c \
+	%D%/quark_d20xx.c \
+	%D%/lakemont.c \
+	%D%/x86_32_common.c
+
+%C%_libtarget_la_SOURCES += \
+	%D%/algorithm.h \
+	%D%/arm.h \
+	%D%/arm_dpm.h \
+	%D%/arm_jtag.h \
+	%D%/arm_adi_v5.h \
+	%D%/armv7a_cache.h \
+	%D%/armv7a_cache_l2x.h \
+	%D%/arm_disassembler.h \
+	%D%/arm_opcodes.h \
+	%D%/arm_simulator.h \
+	%D%/arm_semihosting.h \
+	%D%/arm7_9_common.h \
+	%D%/arm7tdmi.h \
+	%D%/arm720t.h \
+	%D%/arm9tdmi.h \
+	%D%/arm920t.h \
+	%D%/arm926ejs.h \
+	%D%/arm966e.h \
+	%D%/arm946e.h \
+	%D%/arm11.h \
+	%D%/arm11_dbgtap.h \
+	%D%/armv4_5.h \
+	%D%/armv4_5_mmu.h \
+	%D%/armv4_5_cache.h \
+	%D%/armv7a.h \
+	%D%/armv7m.h \
+	%D%/armv7m_trace.h \
+	%D%/avrt.h \
+	%D%/dsp563xx.h \
+	%D%/dsp563xx_once.h \
+	%D%/dsp5680xx.h \
+	%D%/breakpoints.h \
+	%D%/cortex_m.h \
+	%D%/cortex_a.h \
+	%D%/embeddedice.h \
+	%D%/etb.h \
+	%D%/etm.h \
+	%D%/etm_dummy.h \
+	%D%/image.h \
+	%D%/mips32.h \
+	%D%/mips_m4k.h \
+	%D%/mips_ejtag.h \
+	%D%/mips32_pracc.h \
+	%D%/mips32_dmaacc.h \
+	%D%/oocd_trace.h \
+	%D%/register.h \
+	%D%/target.h \
+	%D%/target_type.h \
+	%D%/trace.h \
+	%D%/target_request.h \
+	%D%/trace.h \
+	%D%/xscale.h \
+	%D%/smp.h \
+	%D%/avr32_ap7k.h \
+	%D%/avr32_jtag.h \
+	%D%/avr32_mem.h \
+	%D%/avr32_regs.h \
+	%D%/nds32.h \
+	%D%/nds32_cmd.h \
+	%D%/nds32_disassembler.h \
+	%D%/nds32_edm.h \
+	%D%/nds32_insn.h \
+	%D%/nds32_reg.h \
+	%D%/nds32_tlb.h \
+	%D%/nds32_v2.h \
+	%D%/nds32_v3_common.h \
+	%D%/nds32_v3.h \
+	%D%/nds32_v3m.h \
+	%D%/nds32_aice.h \
+	%D%/lakemont.h \
+	%D%/x86_32_common.h
+
+include %D%/openrisc/Makefile.am
+>>>>>>> v0.10.0
