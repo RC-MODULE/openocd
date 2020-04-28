@@ -41,38 +41,43 @@ static volatile uint8_t *gpio_data_direction_register;
 
 /* low level command set
  */
-static int ep93xx_read(void);
-static void ep93xx_write(int tck, int tms, int tdi);
-static void ep93xx_reset(int trst, int srst);
+static bb_value_t ep93xx_read(void);
+static int ep93xx_write(int tck, int tms, int tdi);
+static int ep93xx_reset(int trst, int srst);
 
 static int ep93xx_init(void);
 static int ep93xx_quit(void);
 
 struct timespec ep93xx_zzzz;
 
-struct jtag_interface ep93xx_interface = {
-	.name = "ep93xx",
-
+static struct jtag_interface ep93xx_interface = {
 	.supported = DEBUG_CAP_TMS_SEQ,
 	.execute_queue = bitbang_execute_queue,
+};
+
+struct adapter_driver ep93xx_adapter_driver = {
+	.name = "ep93xx",
+	.transports = jtag_only,
 
 	.init = ep93xx_init,
 	.quit = ep93xx_quit,
+	.reset = ep93xx_reset,
+
+	.jtag_ops = &ep93xx_interface,
 };
 
 static struct bitbang_interface ep93xx_bitbang = {
 	.read = ep93xx_read,
 	.write = ep93xx_write,
-	.reset = ep93xx_reset,
 	.blink = 0,
 };
 
-static int ep93xx_read(void)
+static bb_value_t ep93xx_read(void)
 {
-	return !!(*gpio_data_register & TDO_BIT);
+	return (*gpio_data_register & TDO_BIT) ? BB_HIGH : BB_LOW;
 }
 
-static void ep93xx_write(int tck, int tms, int tdi)
+static int ep93xx_write(int tck, int tms, int tdi)
 {
 	if (tck)
 		output_value |= TCK_BIT;
@@ -91,10 +96,12 @@ static void ep93xx_write(int tck, int tms, int tdi)
 
 	*gpio_data_register = output_value;
 	nanosleep(&ep93xx_zzzz, NULL);
+
+	return ERROR_OK;
 }
 
 /* (1) assert or (0) deassert reset lines */
-static void ep93xx_reset(int trst, int srst)
+static int ep93xx_reset(int trst, int srst)
 {
 	if (trst == 0)
 		output_value |= TRST_BIT;
@@ -108,6 +115,8 @@ static void ep93xx_reset(int trst, int srst)
 
 	*gpio_data_register = output_value;
 	nanosleep(&ep93xx_zzzz, NULL);
+
+	return ERROR_OK;
 }
 
 static int set_gonk_mode(void)

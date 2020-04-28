@@ -25,14 +25,6 @@
 #include <helper/binarybuffer.h>
 #include <helper/log.h>
 
-#ifdef _DEBUG_JTAG_IO_
-#define DEBUG_JTAG_IO(expr ...) \
-	do { if (1) LOG_DEBUG(expr); } while (0)
-#else
-#define DEBUG_JTAG_IO(expr ...) \
-	do { if (0) LOG_DEBUG(expr); } while (0)
-#endif
-
 #ifndef DEBUG_JTAG_IOZ
 #define DEBUG_JTAG_IOZ 64
 #endif
@@ -83,6 +75,14 @@ typedef enum tap_state {
 
 #endif
 } tap_state_t;
+
+/**
+ * Defines arguments for reset functions
+ */
+#define SRST_DEASSERT   0
+#define SRST_ASSERT     1
+#define TRST_DEASSERT   0
+#define TRST_ASSERT     1
 
 /**
  * Function tap_state_name
@@ -153,8 +153,6 @@ struct jtag_tap {
 	struct jtag_tap_event_action *event_action;
 
 	struct jtag_tap *next_tap;
-	/* dap instance if some null if no instance , initialized to 0 by calloc*/
-	struct adiv5_dap *dap;
 	/* private pointer to support none-jtag specific functions */
 	void *priv;
 };
@@ -164,8 +162,8 @@ void jtag_tap_free(struct jtag_tap *tap);
 
 struct jtag_tap *jtag_all_taps(void);
 const char *jtag_tap_name(const struct jtag_tap *tap);
-struct jtag_tap *jtag_tap_by_string(const char* dotted_name);
-struct jtag_tap *jtag_tap_by_jim_obj(Jim_Interp* interp, Jim_Obj *obj);
+struct jtag_tap *jtag_tap_by_string(const char *dotted_name);
+struct jtag_tap *jtag_tap_by_jim_obj(Jim_Interp *interp, Jim_Obj *obj);
 struct jtag_tap *jtag_tap_by_position(unsigned abs_position);
 struct jtag_tap *jtag_tap_next_enabled(struct jtag_tap *p);
 unsigned jtag_tap_count_enabled(void);
@@ -641,8 +639,6 @@ void jtag_poll_set_enabled(bool value);
 /* The minidriver may have inline versions of some of the low
  * level APIs that are used in inner loops. */
 #include <jtag/minidriver.h>
-
-bool transport_is_jtag(void);
 
 int jim_jtag_newtap(Jim_Interp *interp, int argc, Jim_Obj *const *argv);
 

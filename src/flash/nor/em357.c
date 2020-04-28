@@ -702,6 +702,11 @@ static int em357_probe(struct flash_bank *bank)
 			num_pages = 128;
 			page_size = 2048;
 			break;
+		case 0x80000:
+			/* 512k -- 256 2k pages */
+			num_pages = 256;
+			page_size = 2048;
+			break;
 		default:
 			LOG_WARNING("No size specified for em357 flash driver, assuming 192k!");
 			num_pages = 96;
@@ -771,7 +776,7 @@ COMMAND_HANDLER(em357_handle_lock_command)
 	}
 
 	if (em357_erase_options(bank) != ERROR_OK) {
-		command_print(CMD_CTX, "em357 failed to erase options");
+		command_print(CMD, "em357 failed to erase options");
 		return ERROR_OK;
 	}
 
@@ -779,11 +784,11 @@ COMMAND_HANDLER(em357_handle_lock_command)
 	em357_info->option_bytes.RDP = 0;
 
 	if (em357_write_options(bank) != ERROR_OK) {
-		command_print(CMD_CTX, "em357 failed to lock device");
+		command_print(CMD, "em357 failed to lock device");
 		return ERROR_OK;
 	}
 
-	command_print(CMD_CTX, "em357 locked");
+	command_print(CMD, "em357 locked");
 
 	return ERROR_OK;
 }
@@ -808,16 +813,16 @@ COMMAND_HANDLER(em357_handle_unlock_command)
 	}
 
 	if (em357_erase_options(bank) != ERROR_OK) {
-		command_print(CMD_CTX, "em357 failed to unlock device");
+		command_print(CMD, "em357 failed to unlock device");
 		return ERROR_OK;
 	}
 
 	if (em357_write_options(bank) != ERROR_OK) {
-		command_print(CMD_CTX, "em357 failed to lock device");
+		command_print(CMD, "em357 failed to lock device");
 		return ERROR_OK;
 	}
 
-	command_print(CMD_CTX, "em357 unlocked.\n"
+	command_print(CMD, "em357 unlocked.\n"
 		"INFO: a reset or power cycle is required "
 		"for the new settings to take effect.");
 
@@ -881,9 +886,9 @@ COMMAND_HANDLER(em357_handle_mass_erase_command)
 		for (i = 0; i < bank->num_sectors; i++)
 			bank->sectors[i].is_erased = 1;
 
-		command_print(CMD_CTX, "em357 mass erase complete");
+		command_print(CMD, "em357 mass erase complete");
 	} else
-		command_print(CMD_CTX, "em357 mass erase failed");
+		command_print(CMD, "em357 mass erase failed");
 
 	return retval;
 }
@@ -924,7 +929,7 @@ static const struct command_registration em357_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct flash_driver em357_flash = {
+const struct flash_driver em357_flash = {
 	.name = "em357",
 	.commands = em357_command_handlers,
 	.flash_bank_command = em357_flash_bank_command,
@@ -936,4 +941,5 @@ struct flash_driver em357_flash = {
 	.auto_probe = em357_auto_probe,
 	.erase_check = default_flash_blank_check,
 	.protect_check = em357_protect_check,
+	.free_driver_priv = default_flash_free_driver_priv,
 };

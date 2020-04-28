@@ -22,7 +22,11 @@
 #ifndef OPENOCD_HELPER_COMMAND_H
 #define OPENOCD_HELPER_COMMAND_H
 
+#include <stdint.h>
+#include <stdbool.h>
 #include <jim-nvp.h>
+
+#include <helper/types.h>
 
 /* To achieve C99 printf compatibility in MinGW, gnu_printf should be
  * used for __attribute__((format( ... ))), with GCC v4.4 or later
@@ -49,7 +53,15 @@ struct command_context {
 	Jim_Interp *interp;
 	enum command_mode mode;
 	struct command *commands;
-	int current_target;
+	struct target *current_target;
+		/* The target set by 'targets xx' command or the latest created */
+	struct target *current_target_override;
+		/* If set overrides current_target
+		 * It happens during processing of
+		 *	1) a target prefixed command
+		 *	2) an event handler
+		 * Pay attention to reentrancy when setting override.
+		 */
 	command_output_handler_t output_handler;
 	void *output_handler_priv;
 };
@@ -67,6 +79,7 @@ struct command_invocation {
 	const char *name;
 	unsigned argc;
 	const char **argv;
+	Jim_Obj *output;
 };
 
 /**
@@ -109,6 +122,11 @@ struct command_invocation {
  */
 #define COMMAND_HELPER(name, extra ...) __COMMAND_HANDLER(name, extra)
 
+/**
+ * Use this macro to access the command being handled,
+ * rather than accessing the variable directly.  It may be moved.
+ */
+#define CMD (cmd)
 /**
  * Use this macro to access the context of the command being handled,
  * rather than accessing the variable directly.  It may be moved.
@@ -168,6 +186,11 @@ struct command {
 	command_handler_t handler;
 	Jim_CmdProc *jim_handler;
 	void *jim_handler_data;
+		/* Currently used only for target of target-prefixed cmd.
+		 * Native OpenOCD commands use jim_handler_data exclusively
+		 * as a target override.
+		 * Jim handlers outside of target cmd tree can use
+		 * jim_handler_data for any handler specific data */
 	enum command_mode mode;
 	struct command *next;
 };
@@ -203,7 +226,6 @@ struct command_registration {
 	const char *name;
 	command_handler_t handler;
 	Jim_CmdProc *jim_handler;
-	void *jim_handler_data;
 	enum command_mode mode;
 	const char *help;
 	/** a string listing the options and arguments, required or optional */
@@ -308,6 +330,14 @@ struct command_context *current_command_context(Jim_Interp *interp);
  */
 struct command_context *command_init(const char *startup_tcl, Jim_Interp *interp);
 /**
+ * Shutdown a command context.
+ *
+ * Free the command context and the associated Jim interpreter.
+ *
+ * @param context The command_context that will be destroyed.
+ */
+void command_exit(struct command_context *context);
+/**
  * Creates a copy of an existing command context.  This does not create
  * a deep copy of the command list, so modifications in one context will
  * affect all shared contexts.  The caller must track reference counting
@@ -323,9 +353,9 @@ struct command_context *copy_command_context(struct command_context *cmd_ctx);
  */
 void command_done(struct command_context *context);
 
-void command_print(struct command_context *context, const char *format, ...)
+void command_print(struct command_invocation *cmd, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 2, 3)));
-void command_print_sameline(struct command_context *context, const char *format, ...)
+void command_print_sameline(struct command_invocation *cmd, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 2, 3)));
 int command_run_line(struct command_context *context, char *line);
 int command_run_linef(struct command_context *context, const char *format, ...)
@@ -357,9 +387,12 @@ DECLARE_PARSE_WRAPPER(_u16, uint16_t);
 DECLARE_PARSE_WRAPPER(_u8, uint8_t);
 
 DECLARE_PARSE_WRAPPER(_int, int);
+DECLARE_PARSE_WRAPPER(_s64, int64_t);
 DECLARE_PARSE_WRAPPER(_s32, int32_t);
 DECLARE_PARSE_WRAPPER(_s16, int16_t);
 DECLARE_PARSE_WRAPPER(_s8, int8_t);
+
+DECLARE_PARSE_WRAPPER(_target_addr, target_addr_t);
 
 /**
  * @brief parses the string @a in into @a out as a @a type, or prints
@@ -376,11 +409,14 @@ DECLARE_PARSE_WRAPPER(_s8, int8_t);
 	do { \
 		int retval_macro_tmp = parse_ ## type(in, &(out)); \
 		if (ERROR_OK != retval_macro_tmp) { \
-			command_print(CMD_CTX, stringify(out) \
+			command_print(CMD, stringify(out) \
 				" option value ('%s') is not valid", in); \
 			return retval_macro_tmp; \
 		} \
 	} while (0)
+
+#define COMMAND_PARSE_ADDRESS(in, out) \
+	COMMAND_PARSE_NUMBER(target_addr, in, out)
 
 /**
  * Parse the string @c as a binary parameter, storing the boolean value
@@ -393,9 +429,9 @@ DECLARE_PARSE_WRAPPER(_s8, int8_t);
 		bool value; \
 		int retval_macro_tmp = command_parse_bool_arg(in, &value); \
 		if (ERROR_OK != retval_macro_tmp) { \
-			command_print(CMD_CTX, stringify(out) \
+			command_print(CMD, stringify(out) \
 				" option value ('%s') is not valid", in); \
-			command_print(CMD_CTX, "  choices are '%s' or '%s'", \
+			command_print(CMD, "  choices are '%s' or '%s'", \
 				on, off); \
 			return retval_macro_tmp; \
 		} \

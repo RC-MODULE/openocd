@@ -53,11 +53,11 @@ struct target_type {
 
 	/* halt will log a warning, but return ERROR_OK if the target is already halted. */
 	int (*halt)(struct target *target);
-	int (*resume)(struct target *target, int current, uint32_t address,
+	/* See target.c target_resume() for documentation. */
+	int (*resume)(struct target *target, int current, target_addr_t address,
 			int handle_breakpoints, int debug_execution);
-	int (*step)(struct target *target, int current, uint32_t address,
+	int (*step)(struct target *target, int current, target_addr_t address,
 			int handle_breakpoints);
-
 	/* target reset control. assert reset can be invoked when OpenOCD and
 	 * the target is out of sync.
 	 *
@@ -84,9 +84,18 @@ struct target_type {
 	 * "halt".
 	 *
 	 * reset run; halt
-     */
+	 */
 	int (*deassert_reset)(struct target *target);
 	int (*soft_reset_halt)(struct target *target);
+
+	/**
+	 * Target architecture for GDB.
+	 *
+	 * The string returned by this function will not be automatically freed;
+	 * if dynamic allocation is used for this value, it must be managed by
+	 * the target, ideally by caching the result for subsequent calls.
+	 */
+	const char *(*get_gdb_arch)(struct target *target);
 
 	/**
 	 * Target register access for GDB.  Do @b not call this function
@@ -102,6 +111,13 @@ struct target_type {
 	int (*get_gdb_reg_list)(struct target *target, struct reg **reg_list[],
 			int *reg_list_size, enum target_register_class reg_class);
 
+	/**
+	 * Same as get_gdb_reg_list, but doesn't read the register values.
+	 * */
+	int (*get_gdb_reg_list_noread)(struct target *target,
+			struct reg **reg_list[], int *reg_list_size,
+			enum target_register_class reg_class);
+
 	/* target memory access
 	* size: 1 = byte (8bit), 2 = half-word (16bit), 4 = word (32bit)
 	* count: number of items of <size>
@@ -111,27 +127,28 @@ struct target_type {
 	 * Target memory read callback.  Do @b not call this function
 	 * directly, use target_read_memory() instead.
 	 */
-	int (*read_memory)(struct target *target, uint32_t address,
+	int (*read_memory)(struct target *target, target_addr_t address,
 			uint32_t size, uint32_t count, uint8_t *buffer);
 	/**
 	 * Target memory write callback.  Do @b not call this function
 	 * directly, use target_write_memory() instead.
 	 */
-	int (*write_memory)(struct target *target, uint32_t address,
+	int (*write_memory)(struct target *target, target_addr_t address,
 			uint32_t size, uint32_t count, const uint8_t *buffer);
 
 	/* Default implementation will do some fancy alignment to improve performance, target can override */
-	int (*read_buffer)(struct target *target, uint32_t address,
+	int (*read_buffer)(struct target *target, target_addr_t address,
 			uint32_t size, uint8_t *buffer);
 
 	/* Default implementation will do some fancy alignment to improve performance, target can override */
-	int (*write_buffer)(struct target *target, uint32_t address,
+	int (*write_buffer)(struct target *target, target_addr_t address,
 			uint32_t size, const uint8_t *buffer);
 
-	int (*checksum_memory)(struct target *target, uint32_t address,
+	int (*checksum_memory)(struct target *target, target_addr_t address,
 			uint32_t count, uint32_t *checksum);
-	int (*blank_check_memory)(struct target *target, uint32_t address,
-			uint32_t count, uint32_t *blank, uint8_t erased_value);
+	int (*blank_check_memory)(struct target *target,
+			struct target_memory_check_block *blocks, int num_blocks,
+			uint8_t erased_value);
 
 	/*
 	 * target break-/watchpoint control
@@ -175,15 +192,15 @@ struct target_type {
 	 */
 	int (*run_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
-			struct reg_param *reg_param, uint32_t entry_point,
-			uint32_t exit_point, int timeout_ms, void *arch_info);
+			struct reg_param *reg_param, target_addr_t entry_point,
+			target_addr_t exit_point, int timeout_ms, void *arch_info);
 	int (*start_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
-			struct reg_param *reg_param, uint32_t entry_point,
-			uint32_t exit_point, void *arch_info);
+			struct reg_param *reg_param, target_addr_t entry_point,
+			target_addr_t exit_point, void *arch_info);
 	int (*wait_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
-			struct reg_param *reg_param, uint32_t exit_point,
+			struct reg_param *reg_param, target_addr_t exit_point,
 			int timeout_ms, void *arch_info);
 
 	const struct command_registration *commands;
@@ -233,7 +250,7 @@ struct target_type {
 	/* translate from virtual to physical address. Default implementation is successful
 	 * no-op(i.e. virtual==physical).
 	 */
-	int (*virt2phys)(struct target *target, uint32_t address, uint32_t *physical);
+	int (*virt2phys)(struct target *target, target_addr_t address, target_addr_t *physical);
 
 	/* read directly from physical memory. caches are bypassed and untouched.
 	 *
@@ -243,13 +260,13 @@ struct target_type {
 	 *
 	 * Default implementation is to call read_memory.
 	 */
-	int (*read_phys_memory)(struct target *target, uint32_t phys_address,
+	int (*read_phys_memory)(struct target *target, target_addr_t phys_address,
 			uint32_t size, uint32_t count, uint8_t *buffer);
 
 	/*
 	 * same as read_phys_memory, except that it writes...
 	 */
-	int (*write_phys_memory)(struct target *target, uint32_t phys_address,
+	int (*write_phys_memory)(struct target *target, target_addr_t phys_address,
 			uint32_t size, uint32_t count, const uint8_t *buffer);
 
 	int (*mmu)(struct target *target, int *enabled);
@@ -274,6 +291,11 @@ struct target_type {
 	 */
 	int (*profiling)(struct target *target, uint32_t *samples,
 			uint32_t max_num_samples, uint32_t *num_samples, uint32_t seconds);
+
+	/* Return the number of address bits this target supports. This will
+	 * typically be 32 for 32-bit targets, and 64 for 64-bit targets. If not
+	 * implemented, it's assumed to be 32. */
+	unsigned (*address_bits)(struct target *target);
 };
 
 #endif /* OPENOCD_TARGET_TARGET_TYPE_H */

@@ -50,60 +50,31 @@ static int64_t current_time;
 
 static int64_t start;
 
-static const char * const log_strings[5] = {
+static const char * const log_strings[6] = {
 	"User : ",
 	"Error: ",
 	"Warn : ",	/* want a space after each colon, all same width, colons aligned */
 	"Info : ",
+	"Debug: ",
 	"Debug: "
 };
 
 static int count;
 
-static struct store_log_forward *log_head;
-static int log_forward_count;
-
-struct store_log_forward {
-	struct store_log_forward *next;
-	const char *file;
-	int line;
-	const char *function;
-	const char *string;
-};
-
-/* either forward the log to the listeners or store it for possible forwarding later */
+/* forward the log to the listeners */
 static void log_forward(const char *file, unsigned line, const char *function, const char *string)
 {
-	if (log_forward_count == 0) {
-		struct log_callback *cb, *next;
-		cb = log_callbacks;
-		/* DANGER!!!! the log callback can remove itself!!!! */
-		while (cb) {
-			next = cb->next;
-			cb->fn(cb->priv, file, line, function, string);
-			cb = next;
-		}
-	} else {
-		struct store_log_forward *log = malloc(sizeof(struct store_log_forward));
-		log->file = strdup(file);
-		log->line = line;
-		log->function = strdup(function);
-		log->string = strdup(string);
-		log->next = NULL;
-		if (log_head == NULL)
-			log_head = log;
-		else {
-			/* append to tail */
-			struct store_log_forward *t;
-			t = log_head;
-			while (t->next != NULL)
-				t = t->next;
-			t->next = log;
-		}
+	struct log_callback *cb, *next;
+	cb = log_callbacks;
+	/* DANGER!!!! the log callback can remove itself!!!! */
+	while (cb) {
+		next = cb->next;
+		cb->fn(cb->priv, file, line, function, string);
+		cb = next;
 	}
 }
 
-/* The log_puts() serves to somewhat different goals:
+/* The log_puts() serves two somewhat different goals:
  *
  * - logging
  * - feeding low-level info to the user in GDB or Telnet
@@ -234,38 +205,55 @@ COMMAND_HANDLER(handle_debug_level_command)
 	if (CMD_ARGC == 1) {
 		int new_level;
 		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], new_level);
-		if ((new_level > LOG_LVL_DEBUG) || (new_level < LOG_LVL_SILENT)) {
-			LOG_ERROR("level must be between %d and %d", LOG_LVL_SILENT, LOG_LVL_DEBUG);
+		if ((new_level > LOG_LVL_DEBUG_IO) || (new_level < LOG_LVL_SILENT)) {
+			LOG_ERROR("level must be between %d and %d", LOG_LVL_SILENT, LOG_LVL_DEBUG_IO);
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		}
 		debug_level = new_level;
 	} else if (CMD_ARGC > 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	command_print(CMD_CTX, "debug_level: %i", debug_level);
+	command_print(CMD, "debug_level: %i", debug_level);
 
 	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_log_output_command)
 {
+	if (CMD_ARGC == 0 || (CMD_ARGC == 1 && strcmp(CMD_ARGV[0], "default") == 0)) {
+		if (log_output != stderr && log_output != NULL) {
+			/* Close previous log file, if it was open and wasn't stderr. */
+			fclose(log_output);
+		}
+		log_output = stderr;
+		LOG_DEBUG("set log_output to default");
+		return ERROR_OK;
+	}
 	if (CMD_ARGC == 1) {
 		FILE *file = fopen(CMD_ARGV[0], "w");
-
-		if (file)
-			log_output = file;
+		if (file == NULL) {
+			LOG_ERROR("failed to open output log '%s'", CMD_ARGV[0]);
+			return ERROR_FAIL;
+		}
+		if (log_output != stderr && log_output != NULL) {
+			/* Close previous log file, if it was open and wasn't stderr. */
+			fclose(log_output);
+		}
+		log_output = file;
+		LOG_DEBUG("set log_output to \"%s\"", CMD_ARGV[0]);
+		return ERROR_OK;
 	}
 
-	return ERROR_OK;
+	return ERROR_COMMAND_SYNTAX_ERROR;
 }
 
-static struct command_registration log_command_handlers[] = {
+static const struct command_registration log_command_handlers[] = {
 	{
 		.name = "log_output",
 		.handler = handle_log_output_command,
 		.mode = COMMAND_ANY,
 		.help = "redirect logging to a file (default: stderr)",
-		.usage = "file_name",
+		.usage = "[file_name | \"default\"]",
 	},
 	{
 		.name = "debug_level",
@@ -273,7 +261,8 @@ static struct command_registration log_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = "Sets the verbosity level of debugging output. "
 			"0 shows errors only; 1 adds warnings; "
-			"2 (default) adds other info; 3 adds debugging.",
+			"2 (default) adds other info; 3 adds debugging; "
+			"4 adds extra verbose debugging.",
 		.usage = "number",
 	},
 	COMMAND_REGISTRATION_DONE
@@ -297,7 +286,7 @@ void log_init(void)
 		int retval = parse_int(debug_env, &value);
 		if (ERROR_OK == retval &&
 				debug_level >= LOG_LVL_SILENT &&
-				debug_level <= LOG_LVL_DEBUG)
+				debug_level <= LOG_LVL_DEBUG_IO)
 				debug_level = value;
 	}
 
@@ -475,4 +464,29 @@ void busy_sleep(uint64_t ms)
 		 * busy wait
 		 */
 	}
+}
+
+/* Maximum size of socket error message retreived from operation system */
+#define MAX_SOCKET_ERR_MSG_LENGTH 256
+
+/* Provide log message for the last socket error.
+   Uses errno on *nix and WSAGetLastError() on Windows */
+void log_socket_error(const char *socket_desc)
+{
+	int error_code;
+#ifdef _WIN32
+	error_code = WSAGetLastError();
+	char error_message[MAX_SOCKET_ERR_MSG_LENGTH];
+	error_message[0] = '\0';
+	DWORD retval = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, error_code, 0,
+		error_message, MAX_SOCKET_ERR_MSG_LENGTH, NULL);
+	error_message[MAX_SOCKET_ERR_MSG_LENGTH - 1] = '\0';
+	const bool have_message = (retval != 0) && (error_message[0] != '\0');
+	LOG_ERROR("Error on socket '%s': WSAGetLastError==%d%s%s.", socket_desc, error_code,
+		(have_message ? ", message: " : ""),
+		(have_message ? error_message : ""));
+#else
+	error_code = errno;
+	LOG_ERROR("Error on socket '%s': errno==%d, message: %s.", socket_desc, error_code, strerror(error_code));
+#endif
 }

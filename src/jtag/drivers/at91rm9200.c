@@ -109,9 +109,8 @@ static uint32_t *pio_base;
 
 /* low level command set
  */
-static int at91rm9200_read(void);
-static void at91rm9200_write(int tck, int tms, int tdi);
-static void at91rm9200_reset(int trst, int srst);
+static bb_value_t at91rm9200_read(void);
+static int at91rm9200_write(int tck, int tms, int tdi);
 
 static int at91rm9200_init(void);
 static int at91rm9200_quit(void);
@@ -119,16 +118,15 @@ static int at91rm9200_quit(void);
 static struct bitbang_interface at91rm9200_bitbang = {
 	.read = at91rm9200_read,
 	.write = at91rm9200_write,
-	.reset = at91rm9200_reset,
 	.blink = 0
 };
 
-static int at91rm9200_read(void)
+static bb_value_t at91rm9200_read(void)
 {
-	return (pio_base[device->TDO_PIO + PIO_PDSR] & device->TDO_MASK) != 0;
+	return (pio_base[device->TDO_PIO + PIO_PDSR] & device->TDO_MASK) ? BB_HIGH : BB_LOW;
 }
 
-static void at91rm9200_write(int tck, int tms, int tdi)
+static int at91rm9200_write(int tck, int tms, int tdi)
 {
 	if (tck)
 		pio_base[device->TCK_PIO + PIO_SODR] = device->TCK_MASK;
@@ -144,10 +142,12 @@ static void at91rm9200_write(int tck, int tms, int tdi)
 		pio_base[device->TDI_PIO + PIO_SODR] = device->TDI_MASK;
 	else
 		pio_base[device->TDI_PIO + PIO_CODR] = device->TDI_MASK;
+
+	return ERROR_OK;
 }
 
 /* (1) assert or (0) deassert reset lines */
-static void at91rm9200_reset(int trst, int srst)
+static int at91rm9200_reset(int trst, int srst)
 {
 	if (trst == 0)
 		pio_base[device->TRST_PIO + PIO_SODR] = device->TRST_MASK;
@@ -158,6 +158,8 @@ static void at91rm9200_reset(int trst, int srst)
 		pio_base[device->SRST_PIO + PIO_SODR] = device->SRST_MASK;
 	else if (srst == 1)
 		pio_base[device->SRST_PIO + PIO_CODR] = device->SRST_MASK;
+
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(at91rm9200_handle_device_command)
@@ -179,17 +181,26 @@ static const struct command_registration at91rm9200_command_handlers[] = {
 		.name = "at91rm9200_device",
 		.handler = &at91rm9200_handle_device_command,
 		.mode = COMMAND_CONFIG,
-		.help = "query armjtagew info",
+		.help = "Set at91rm9200 device [default \"rea_ecr\"]",
+		.usage = "<device>",
 	},
 	COMMAND_REGISTRATION_DONE
 };
 
-struct jtag_interface at91rm9200_interface = {
-	.name = "at91rm9200",
+static struct jtag_interface at91rm9200_interface = {
 	.execute_queue = bitbang_execute_queue,
+};
+
+struct adapter_driver at91rm9200_adapter_driver = {
+	.name = "at91rm9200",
+	.transports = jtag_only,
 	.commands = at91rm9200_command_handlers,
+
 	.init = at91rm9200_init,
 	.quit = at91rm9200_quit,
+	.reset = at91rm9200_reset,
+
+	.jtag_ops = &at91rm9200_interface,
 };
 
 static int at91rm9200_init(void)

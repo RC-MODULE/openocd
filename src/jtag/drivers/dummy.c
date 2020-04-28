@@ -33,14 +33,14 @@ static int clock_count;		/* count clocks in any stable state, only stable states
 
 static uint32_t dummy_data;
 
-static int dummy_read(void)
+static bb_value_t dummy_read(void)
 {
 	int data = 1 & dummy_data;
 	dummy_data = (dummy_data >> 1) | (1 << 31);
-	return data;
+	return data ? BB_HIGH : BB_LOW;
 }
 
-static void dummy_write(int tck, int tms, int tdi)
+static int dummy_write(int tck, int tms, int tdi)
 {
 	/* TAP standard: "state transitions occur on rising edge of clock" */
 	if (tck != dummy_clock) {
@@ -69,9 +69,10 @@ static void dummy_write(int tck, int tms, int tdi)
 		}
 		dummy_clock = tck;
 	}
+	return ERROR_OK;
 }
 
-static void dummy_reset(int trst, int srst)
+static int dummy_reset(int trst, int srst)
 {
 	dummy_clock = 0;
 
@@ -79,16 +80,17 @@ static void dummy_reset(int trst, int srst)
 		dummy_state = TAP_RESET;
 
 	LOG_DEBUG("reset to: %s", tap_state_name(dummy_state));
+	return ERROR_OK;
 }
 
-static void dummy_led(int on)
+static int dummy_led(int on)
 {
+	return ERROR_OK;
 }
 
 static struct bitbang_interface dummy_bitbang = {
 		.read = &dummy_read,
 		.write = &dummy_write,
-		.reset = &dummy_reset,
 		.blink = &dummy_led,
 	};
 
@@ -133,8 +135,8 @@ static const struct command_registration dummy_command_handlers[] = {
 		.name = "dummy",
 		.mode = COMMAND_ANY,
 		.help = "dummy interface driver commands",
-
 		.chain = hello_command_handlers,
+		.usage = "",
 	},
 	COMMAND_REGISTRATION_DONE,
 };
@@ -142,19 +144,22 @@ static const struct command_registration dummy_command_handlers[] = {
 /* The dummy driver is used to easily check the code path
  * where the target is unresponsive.
  */
-struct jtag_interface dummy_interface = {
-		.name = "dummy",
+static struct jtag_interface dummy_interface = {
+	.supported = DEBUG_CAP_TMS_SEQ,
+	.execute_queue = &bitbang_execute_queue,
+};
 
-		.supported = DEBUG_CAP_TMS_SEQ,
-		.commands = dummy_command_handlers,
-		.transports = jtag_only,
+struct adapter_driver dummy_adapter_driver = {
+	.name = "dummy",
+	.transports = jtag_only,
+	.commands = dummy_command_handlers,
 
-		.execute_queue = &bitbang_execute_queue,
+	.init = &dummy_init,
+	.quit = &dummy_quit,
+	.reset = &dummy_reset,
+	.speed = &dummy_speed,
+	.khz = &dummy_khz,
+	.speed_div = &dummy_speed_div,
 
-		.speed = &dummy_speed,
-		.khz = &dummy_khz,
-		.speed_div = &dummy_speed_div,
-
-		.init = &dummy_init,
-		.quit = &dummy_quit,
-	};
+	.jtag_ops = &dummy_interface,
+};

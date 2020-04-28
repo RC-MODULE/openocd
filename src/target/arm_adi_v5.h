@@ -102,6 +102,7 @@
 #define AP_REG_IDR			0xFC		/* RO: Identification Register */
 
 /* Fields of the MEM-AP's CSW register */
+#define CSW_SIZE_MASK		7
 #define CSW_8BIT		0
 #define CSW_16BIT		1
 #define CSW_32BIT		2
@@ -111,12 +112,34 @@
 #define CSW_ADDRINC_PACKED  (2UL << 4)
 #define CSW_DEVICE_EN       (1UL << 6)
 #define CSW_TRIN_PROG       (1UL << 7)
+
+/* All fields in bits 12 and above are implementation-defined
+ * Defaults for AHB/AXI in "Standard Memory Access Port Definitions" from ADI
+ * Some bits are shared between buses
+ */
 #define CSW_SPIDEN          (1UL << 23)
-/* 30:24 - implementation-defined! */
-#define CSW_HPROT           (1UL << 25) /* ? */
-#define CSW_MASTER_DEBUG    (1UL << 29) /* ? */
-#define CSW_SPROT           (1UL << 30)
 #define CSW_DBGSWENABLE     (1UL << 31)
+
+/* AHB: Privileged */
+#define CSW_AHB_HPROT1          (1UL << 25)
+/* AHB: set HMASTER signals to AHB-AP ID */
+#define CSW_AHB_MASTER_DEBUG    (1UL << 29)
+/* AHB5: non-secure access via HNONSEC
+ * AHB3: SBO, UNPREDICTABLE if zero */
+#define CSW_AHB_SPROT           (1UL << 30)
+/* AHB: initial value of csw_default */
+#define CSW_AHB_DEFAULT         (CSW_AHB_HPROT1 | CSW_AHB_MASTER_DEBUG | CSW_DBGSWENABLE)
+
+/* AXI: Privileged */
+#define CSW_AXI_ARPROT0_PRIV    (1UL << 28)
+/* AXI: Non-secure */
+#define CSW_AXI_ARPROT1_NONSEC  (1UL << 29)
+/* AXI: initial value of csw_default */
+#define CSW_AXI_DEFAULT         (CSW_AXI_ARPROT0_PRIV | CSW_AXI_ARPROT1_NONSEC | CSW_DBGSWENABLE)
+
+/* APB: initial value of csw_default */
+#define CSW_APB_DEFAULT         (CSW_DBGSWENABLE)
+
 
 /* Fields of the MEM-AP's IDR register */
 #define IDR_REV     (0xFUL << 28)
@@ -131,6 +154,18 @@
 #define DP_SELECT_APBANK 0x000000F0
 #define DP_SELECT_DPBANK 0x0000000F
 #define DP_SELECT_INVALID 0x00FFFF00 /* Reserved bits one */
+
+#define DP_APSEL_MAX        (255)
+#define DP_APSEL_INVALID    (-1)
+
+/* FIXME: not SWD specific; should be renamed, e.g. adiv5_special_seq */
+enum swd_special_seq {
+	LINE_RESET,
+	JTAG_TO_SWD,
+	SWD_TO_JTAG,
+	SWD_TO_DORMANT,
+	DORMANT_TO_SWD,
+};
 
 /**
  * This represents an ARM Debug Interface (v5) Access Port (AP).
@@ -180,6 +215,9 @@ struct adiv5_ap {
 
 	/* true if unaligned memory access is not supported by the MEM-AP */
 	bool unaligned_access_bad;
+
+	/* true if tar_value is in sync with TAR register */
+	bool tar_valid;
 };
 
 
@@ -204,6 +242,12 @@ struct adiv5_dap {
 
 	/* dap transaction list for WAIT support */
 	struct list_head cmd_journal;
+
+	/* pool for dap_cmd objects */
+	struct list_head cmd_pool;
+
+	/* number of dap_cmd objects in the pool */
+	size_t cmd_pool_size;
 
 	struct jtag_tap *tap;
 	/* Control config */
@@ -236,10 +280,20 @@ struct adiv5_dap {
 	bool ti_be_32_quirks;
 
 	/**
+	 * STLINK adapter need to know if last AP operation was read or write, and
+	 * in case of write has to flush it with a dummy read from DP_RDBUFF
+	 */
+	bool stlink_flush_ap_write;
+
+	/**
 	 * Signals that an attempt to reestablish communication afresh
 	 * should be performed before the next access.
 	 */
 	bool do_reconnect;
+
+	/** Flag saying whether to ignore the syspwrupack flag in DAP. Some devices
+	 *  do not set this bit until later in the bringup sequence */
+	bool ignore_syspwrupack;
 };
 
 /**
@@ -250,6 +304,12 @@ struct adiv5_dap {
  * available until run().
  */
 struct dap_ops {
+	/** connect operation for SWD */
+	int (*connect)(struct adiv5_dap *dap);
+
+	/** send a sequence to the DAP */
+	int (*send_sequence)(struct adiv5_dap *dap, enum swd_special_seq seq);
+
 	/** DP register read. */
 	int (*queue_dp_read)(struct adiv5_dap *dap, unsigned reg,
 			uint32_t *data);
@@ -273,6 +333,9 @@ struct dap_ops {
 	/** Executes all queued DAP operations but doesn't check
 	 * sticky error conditions */
 	int (*sync)(struct adiv5_dap *dap);
+
+	/** Optional; called at OpenOCD exit */
+	void (*quit)(struct adiv5_dap *dap);
 };
 
 /*
@@ -288,10 +351,26 @@ enum ap_class {
  */
 enum ap_type {
 	AP_TYPE_JTAG_AP = 0x0,  /* JTAG-AP - JTAG master for controlling other JTAG devices */
-	AP_TYPE_AHB_AP  = 0x1,  /* AHB Memory-AP */
+	AP_TYPE_AHB3_AP = 0x1,  /* AHB3 Memory-AP */
 	AP_TYPE_APB_AP  = 0x2,  /* APB Memory-AP */
 	AP_TYPE_AXI_AP  = 0x4,  /* AXI Memory-AP */
+	AP_TYPE_AHB5_AP = 0x5,  /* AHB5 Memory-AP. */
 };
+
+/**
+ * Send an adi-v5 sequence to the DAP.
+ *
+ * @param dap The DAP used for reading.
+ * @param seq The sequence to send.
+ *
+ * @return ERROR_OK for success, else a fault code.
+ */
+static inline int dap_send_sequence(struct adiv5_dap *dap,
+		enum swd_special_seq seq)
+{
+	assert(dap->ops != NULL);
+	return dap->ops->send_sequence(dap, seq);
+}
 
 /**
  * Queue a DP register read.
@@ -469,12 +548,12 @@ int mem_ap_read_buf_noincr(struct adiv5_ap *ap,
 int mem_ap_write_buf_noincr(struct adiv5_ap *ap,
 		const uint8_t *buffer, uint32_t size, uint32_t count, uint32_t address);
 
-/* Create DAP struct */
-struct adiv5_dap *dap_init(void);
-
 /* Initialisation of the debug system, power domains and registers */
 int dap_dp_init(struct adiv5_dap *dap);
 int mem_ap_init(struct adiv5_ap *ap);
+
+/* Invalidate cached DP select and cached TAR and CSW of all APs */
+void dap_invalidate_cache(struct adiv5_dap *dap);
 
 /* Probe the AP for ROM Table location */
 int dap_get_debugbase(struct adiv5_ap *ap,
@@ -497,17 +576,29 @@ int dap_lookup_cs_component(struct adiv5_ap *ap,
 struct target;
 
 /* Put debug link into SWD mode */
-int dap_to_swd(struct target *target);
+int dap_to_swd(struct adiv5_dap *dap);
 
 /* Put debug link into JTAG mode */
-int dap_to_jtag(struct target *target);
+int dap_to_jtag(struct adiv5_dap *dap);
 
-extern const struct command_registration dap_command_handlers[];
+extern const struct command_registration dap_instance_commands[];
+
+struct arm_dap_object;
+extern struct adiv5_dap *dap_instance_by_jim_obj(Jim_Interp *interp, Jim_Obj *o);
+extern struct adiv5_dap *adiv5_get_dap(struct arm_dap_object *obj);
+extern int dap_info_command(struct command_invocation *cmd,
+					 struct adiv5_ap *ap);
+extern int dap_register_commands(struct command_context *cmd_ctx);
+extern const char *adiv5_dap_name(struct adiv5_dap *self);
+extern const struct swd_driver *adiv5_dap_swd_driver(struct adiv5_dap *self);
+extern int dap_cleanup_all(void);
 
 struct adiv5_private_config {
 	int ap_num;
+	struct adiv5_dap *dap;
 };
 
+extern int adiv5_verify_config(struct adiv5_private_config *pc);
 extern int adiv5_jim_configure(struct target *target, Jim_GetOptInfo *goi);
 
 #endif /* OPENOCD_TARGET_ARM_ADI_V5_H */

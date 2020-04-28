@@ -4,7 +4,9 @@ else
 OOCD_TRACE_FILES =
 endif
 
-%C%_libtarget_la_LIBADD = %D%/openrisc/libopenrisc.la
+%C%_libtarget_la_LIBADD = %D%/openrisc/libopenrisc.la \
+	%D%/riscv/libriscv.la
+
 
 STARTUP_TCL_SRCS += %D%/startup.tcl
 
@@ -19,13 +21,18 @@ noinst_LTLIBRARIES += %D%/libtarget.la
 	$(AVR32_SRC) \
 	$(MIPS32_SRC) \
 	$(NDS32_SRC) \
+	$(STM8_SRC) \
 	$(INTEL_IA32_SRC) \
 	$(PPC476FS_SRC) \
+	$(ESIRISC_SRC) \
+        $(ARC_SRC) \
 	%D%/avrt.c \
 	%D%/dsp563xx.c \
 	%D%/dsp563xx_once.c \
 	%D%/dsp5680xx.c \
-	%D%/hla_target.c
+	%D%/hla_target.c \
+	$(ARMV8_SRC) \
+	$(MIPS64_SRC)
 
 TARGET_CORE_SRC = \
 	%D%/algorithm.c \
@@ -35,6 +42,7 @@ TARGET_CORE_SRC = \
 	%D%/target.c \
 	%D%/target_request.c \
 	%D%/testee.c \
+	%D%/semihosting_common.c \
 	%D%/smp.c
 
 ARMV4_5_SRC = \
@@ -67,8 +75,17 @@ ARMV7_SRC = \
 	%D%/armv7m_trace.c \
 	%D%/cortex_m.c \
 	%D%/armv7a.c \
+	%D%/armv7a_mmu.c \
 	%D%/cortex_a.c \
-	%D%/ls1_sap.c
+	%D%/ls1_sap.c \
+	%D%/mem_ap.c
+
+ARMV8_SRC = \
+	%D%/armv8_dpm.c \
+	%D%/armv8_opcodes.c \
+	%D%/aarch64.c \
+	%D%/armv8.c \
+	%D%/armv8_cache.c
 
 ARM_DEBUG_SRC = \
 	%D%/arm_dpm.c \
@@ -77,8 +94,10 @@ ARM_DEBUG_SRC = \
 	%D%/arm_simulator.c \
 	%D%/arm_semihosting.c \
 	%D%/arm_adi_v5.c \
+	%D%/arm_dap.c \
 	%D%/armv7a_cache.c \
 	%D%/armv7a_cache_l2x.c \
+	%D%/adi_v5_dapdirect.c \
 	%D%/adi_v5_jtag.c \
 	%D%/adi_v5_swd.c \
 	%D%/embeddedice.c \
@@ -86,7 +105,8 @@ ARM_DEBUG_SRC = \
 	%D%/etb.c \
 	%D%/etm.c \
 	$(OOCD_TRACE_FILES) \
-	%D%/etm_dummy.c
+	%D%/etm_dummy.c \
+	%D%/arm_cti.c
 
 AVR32_SRC = \
 	%D%/avr32_ap7k.c \
@@ -101,6 +121,14 @@ MIPS32_SRC = \
 	%D%/mips32_dmaacc.c \
 	%D%/mips_ejtag.c
 
+MIPS64_SRC = \
+	%D%/mips64.c \
+	%D%/mips32_pracc.c \
+	%D%/mips64_pracc.c \
+	%D%/mips_mips64.c \
+	%D%/trace.c \
+	%D%/mips_ejtag.c
+
 NDS32_SRC = \
 	%D%/nds32.c \
 	%D%/nds32_reg.c \
@@ -113,6 +141,9 @@ NDS32_SRC = \
 	%D%/nds32_v3m.c \
 	%D%/nds32_aice.c
 
+STM8_SRC = \
+	%D%/stm8.c
+
 INTEL_IA32_SRC = \
 	%D%/quark_x10xx.c \
 	%D%/quark_d20xx.c \
@@ -122,6 +153,17 @@ INTEL_IA32_SRC = \
 PPC476FS_SRC = \
 	%D%/ppc476fs.c
 
+ESIRISC_SRC = \
+	%D%/esirisc.c \
+	%D%/esirisc_jtag.c \
+	%D%/esirisc_trace.c
+
+ARC_SRC = \
+        %D%/arc.c \
+        %D%/arc_cmd.c \
+        %D%/arc_jtag.c \
+        %D%/arc_mem.c
+
 %C%_libtarget_la_SOURCES += \
 	%D%/algorithm.h \
 	%D%/arm.h \
@@ -130,6 +172,7 @@ PPC476FS_SRC = \
 	%D%/arm_adi_v5.h \
 	%D%/armv7a_cache.h \
 	%D%/armv7a_cache_l2x.h \
+	%D%/armv7a_mmu.h \
 	%D%/arm_disassembler.h \
 	%D%/arm_opcodes.h \
 	%D%/arm_simulator.h \
@@ -150,6 +193,10 @@ PPC476FS_SRC = \
 	%D%/armv7a.h \
 	%D%/armv7m.h \
 	%D%/armv7m_trace.h \
+	%D%/armv8.h \
+	%D%/armv8_dpm.h \
+	%D%/armv8_opcodes.h \
+	%D%/armv8_cache.h \
 	%D%/avrt.h \
 	%D%/dsp563xx.h \
 	%D%/dsp563xx_once.h \
@@ -157,16 +204,20 @@ PPC476FS_SRC = \
 	%D%/breakpoints.h \
 	%D%/cortex_m.h \
 	%D%/cortex_a.h \
+	%D%/aarch64.h \
 	%D%/embeddedice.h \
 	%D%/etb.h \
 	%D%/etm.h \
 	%D%/etm_dummy.h \
 	%D%/image.h \
 	%D%/mips32.h \
+	%D%/mips64.h \
 	%D%/mips_m4k.h \
+	%D%/mips_mips64.h \
 	%D%/mips_ejtag.h \
 	%D%/mips32_pracc.h \
 	%D%/mips32_dmaacc.h \
+	%D%/mips64_pracc.h \
 	%D%/oocd_trace.h \
 	%D%/register.h \
 	%D%/target.h \
@@ -192,7 +243,19 @@ PPC476FS_SRC = \
 	%D%/nds32_v3.h \
 	%D%/nds32_v3m.h \
 	%D%/nds32_aice.h \
+	%D%/semihosting_common.h \
+	%D%/stm8.h \
 	%D%/lakemont.h \
-	%D%/x86_32_common.h
+	%D%/x86_32_common.h \
+	%D%/arm_cti.h \
+	%D%/esirisc.h \
+	%D%/esirisc_jtag.h \
+	%D%/esirisc_regs.h \
+	%D%/esirisc_trace.h \
+	%D%/arc.h \
+	%D%/arc_cmd.h \
+	%D%/arc_jtag.h \
+	%D%/arc_mem.h
 
 include %D%/openrisc/Makefile.am
+include %D%/riscv/Makefile.am

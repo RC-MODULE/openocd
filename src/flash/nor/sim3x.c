@@ -471,7 +471,7 @@ static int sim3x_write_block(struct flash_bank *bank, const uint8_t *buf,
 	return ret;
 }
 
-static int sim3x_flash_write(struct flash_bank *bank, const uint8_t * buffer, uint32_t offset, uint32_t count)
+static int sim3x_flash_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
 {
 	int ret;
 	struct target *target;
@@ -1110,7 +1110,7 @@ static const struct command_registration sim3x_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct flash_driver sim3x_flash = {
+const struct flash_driver sim3x_flash = {
 	.name = "sim3x",
 	.commands = sim3x_command_handlers,
 	.flash_bank_command = sim3x_flash_bank_command,
@@ -1122,5 +1122,6 @@ struct flash_driver sim3x_flash = {
 	.auto_probe = sim3x_auto_probe,
 	.erase_check = default_flash_blank_check,
 	.protect_check = sim3x_flash_protect_check,
-	.info = sim3x_flash_info
+	.info = sim3x_flash_info,
+	.free_driver_priv = default_flash_free_driver_priv,
 };

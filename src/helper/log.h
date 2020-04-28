@@ -46,6 +46,7 @@
  * LOG_LVL_WARNING - non-fatal errors, that may be resolved later
  * LOG_LVL_INFO - state information, etc.
  * LOG_LVL_DEBUG - debug statements, execution trace
+ * LOG_LVL_DEBUG_IO - verbose debug, low-level I/O trace
  */
 enum log_levels {
 	LOG_LVL_SILENT = -3,
@@ -54,7 +55,8 @@ enum log_levels {
 	LOG_LVL_ERROR = 0,
 	LOG_LVL_WARNING = 1,
 	LOG_LVL_INFO = 2,
-	LOG_LVL_DEBUG = 3
+	LOG_LVL_DEBUG = 3,
+	LOG_LVL_DEBUG_IO = 4,
 };
 
 void log_printf(enum log_levels level, const char *file, unsigned line,
@@ -80,6 +82,8 @@ void kept_alive(void);
 void alive_sleep(uint64_t ms);
 void busy_sleep(uint64_t ms);
 
+void log_socket_error(const char *socket_desc);
+
 typedef void (*log_callback_fn)(void *priv, const char *file, unsigned line,
 		const char *function, const char *string);
 
@@ -93,7 +97,8 @@ int log_add_callback(log_callback_fn fn, void *priv);
 int log_remove_callback(log_callback_fn fn, void *priv);
 
 char *alloc_vprintf(const char *fmt, va_list ap);
-char *alloc_printf(const char *fmt, ...);
+char *alloc_printf(const char *fmt, ...)
+	__attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 1, 2)));
 
 extern int debug_level;
 
@@ -101,6 +106,14 @@ extern int debug_level;
  * Matters on feeble CPUs for DEBUG/INFO statements that are involved frequently */
 
 #define LOG_LEVEL_IS(FOO)  ((debug_level) >= (FOO))
+
+#define LOG_DEBUG_IO(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_DEBUG_IO) \
+			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+	} while (0)
 
 #define LOG_DEBUG(expr ...) \
 	do { \
@@ -139,6 +152,8 @@ extern int debug_level;
  */
 #define ERROR_FAIL						(-4)
 #define ERROR_WAIT						(-5)
+/* ERROR_TIMEOUT is already taken by winerror.h. */
+#define ERROR_TIMEOUT_REACHED			(-6)
 
 
 #endif /* OPENOCD_HELPER_LOG_H */

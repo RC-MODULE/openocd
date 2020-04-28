@@ -207,7 +207,7 @@ static int fm4_flash_write(struct flash_bank *bank, const uint8_t *buffer,
 	uint32_t halfword_count = DIV_ROUND_UP(byte_count, 2);
 	uint32_t result;
 	unsigned i;
-	int retval;
+	int retval, retval2 = ERROR_OK;
 	const uint8_t write_block_code[] = {
 #include "../../../contrib/loaders/flash/fm4/write.inc"
 	};
@@ -272,7 +272,7 @@ static int fm4_flash_write(struct flash_bank *bank, const uint8_t *buffer,
 		uint32_t halfwords = MIN(halfword_count, data_workarea->size / 2);
 		uint32_t addr = bank->base + offset;
 
-		LOG_DEBUG("copying %" PRId32 " bytes to SRAM 0x%08" PRIx32,
+		LOG_DEBUG("copying %" PRId32 " bytes to SRAM " TARGET_ADDR_FMT,
 			MIN(halfwords * 2, byte_count), data_workarea->address);
 
 		retval = target_write_buffer(target, data_workarea->address,
@@ -327,7 +327,7 @@ static int fm4_flash_write(struct flash_bank *bank, const uint8_t *buffer,
 err_run_ret:
 err_run:
 err_write_data:
-	retval = fm4_enter_flash_cpu_rom_mode(target);
+	retval2 = fm4_enter_flash_cpu_rom_mode(target);
 
 err_flash_mode:
 	for (i = 0; i < ARRAY_SIZE(reg_params); i++)
@@ -338,7 +338,9 @@ err_alloc_data:
 err_write_code:
 	target_free_working_area(target, code_workarea);
 
-	return retval;
+	if (retval != ERROR_OK)
+		return retval;
+	return retval2;
 }
 
 static int mb9bf_probe(struct flash_bank *bank)
@@ -537,11 +539,6 @@ static int fm4_auto_probe(struct flash_bank *bank)
 	return fm4_probe(bank);
 }
 
-static int fm4_protect_check(struct flash_bank *bank)
-{
-	return ERROR_OK;
-}
-
 static int fm4_get_info_command(struct flash_bank *bank, char *buf, int buf_size)
 {
 	struct fm4_flash_bank *fm4_bank = bank->driver_priv;
@@ -707,16 +704,16 @@ static const struct command_registration fm4_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct flash_driver fm4_flash = {
+const struct flash_driver fm4_flash = {
 	.name = "fm4",
 	.commands = fm4_command_handlers,
 	.flash_bank_command = fm4_flash_bank_command,
 	.info = fm4_get_info_command,
 	.probe = fm4_probe,
 	.auto_probe = fm4_auto_probe,
-	.protect_check = fm4_protect_check,
 	.read = default_flash_read,
 	.erase = fm4_flash_erase,
 	.erase_check = default_flash_blank_check,
 	.write = fm4_flash_write,
+	.free_driver_priv = default_flash_free_driver_priv,
 };

@@ -639,14 +639,6 @@ static int at91sam7_read_part_info(struct flash_bank *bank)
 
 static int at91sam7_erase_check(struct flash_bank *bank)
 {
-	struct target *target = bank->target;
-	uint16_t retval;
-	uint32_t blank;
-	uint16_t fast_check;
-	uint8_t *buffer;
-	uint16_t nSector;
-	uint16_t nByte;
-
 	if (bank->target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
@@ -656,45 +648,7 @@ static int at91sam7_erase_check(struct flash_bank *bank)
 	at91sam7_read_clock_info(bank);
 	at91sam7_set_flash_mode(bank, FMR_TIMING_FLASH);
 
-	fast_check = 1;
-	for (nSector = 0; nSector < bank->num_sectors; nSector++) {
-		retval = target_blank_check_memory(target,
-				bank->base + bank->sectors[nSector].offset,
-				bank->sectors[nSector].size,
-				&blank, bank->erased_value);
-		if (retval != ERROR_OK) {
-			fast_check = 0;
-			break;
-		}
-		if (blank == 0xFF)
-			bank->sectors[nSector].is_erased = 1;
-		else
-			bank->sectors[nSector].is_erased = 0;
-	}
-
-	if (fast_check)
-		return ERROR_OK;
-
-	LOG_USER("Running slow fallback erase check - add working memory");
-
-	buffer = malloc(bank->sectors[0].size);
-	for (nSector = 0; nSector < bank->num_sectors; nSector++) {
-		bank->sectors[nSector].is_erased = 1;
-		retval = target_read_memory(target, bank->base + bank->sectors[nSector].offset, 4,
-				bank->sectors[nSector].size/4, buffer);
-		if (retval != ERROR_OK)
-			return retval;
-
-		for (nByte = 0; nByte < bank->sectors[nSector].size; nByte++) {
-			if (buffer[nByte] != 0xFF) {
-				bank->sectors[nSector].is_erased = 0;
-				break;
-			}
-		}
-	}
-	free(buffer);
-
-	return ERROR_OK;
+	return default_flash_blank_check(bank);
 }
 
 static int at91sam7_protect_check(struct flash_bank *bank)
@@ -757,8 +711,6 @@ FLASH_BANK_COMMAND_HANDLER(at91sam7_flash_bank_command)
 	uint16_t page_size;
 	uint16_t num_nvmbits;
 
-	char *target_name_t;
-
 	int bnk, sec;
 
 	at91sam7_info = malloc(sizeof(struct at91sam7_flash_bank));
@@ -799,9 +751,6 @@ FLASH_BANK_COMMAND_HANDLER(at91sam7_flash_bank_command)
 		return ERROR_OK;
 	}
 
-	target_name_t = calloc(strlen(CMD_ARGV[7]) + 1, sizeof(char));
-	strcpy(target_name_t, CMD_ARGV[7]);
-
 	/* calculate bank size  */
 	bank_size = num_sectors * pages_per_sector * page_size;
 
@@ -840,7 +789,7 @@ FLASH_BANK_COMMAND_HANDLER(at91sam7_flash_bank_command)
 
 		at91sam7_info = t_bank->driver_priv;
 
-		at91sam7_info->target_name  = target_name_t;
+		at91sam7_info->target_name = strdup(CMD_ARGV[7]);
 		at91sam7_info->flashmode = 0;
 		at91sam7_info->ext_freq  = ext_freq;
 		at91sam7_info->num_nvmbits = num_nvmbits;
@@ -1113,7 +1062,7 @@ COMMAND_HANDLER(at91sam7_handle_gpnvm_command)
 	if (bank ==  NULL)
 		return ERROR_FLASH_BANK_INVALID;
 	if (strcmp(bank->driver->name, "at91sam7")) {
-		command_print(CMD_CTX, "not an at91sam7 flash bank '%s'", CMD_ARGV[0]);
+		command_print(CMD, "not an at91sam7 flash bank '%s'", CMD_ARGV[0]);
 		return ERROR_FLASH_BANK_INVALID;
 	}
 	if (bank->target->state != TARGET_HALTED) {
@@ -1137,7 +1086,7 @@ COMMAND_HANDLER(at91sam7_handle_gpnvm_command)
 
 	COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], bit);
 	if ((bit < 0) || (bit >= at91sam7_info->num_nvmbits)) {
-		command_print(CMD_CTX,
+		command_print(CMD,
 			"gpnvm bit '#%s' is out of bounds for target %s",
 			CMD_ARGV[0],
 			at91sam7_info->target_name);
@@ -1186,7 +1135,7 @@ static const struct command_registration at91sam7_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
-struct flash_driver at91sam7_flash = {
+const struct flash_driver at91sam7_flash = {
 	.name = "at91sam7",
 	.usage = "gpnvm <bit> <set | clear>",
 	.commands = at91sam7_command_handlers,
