@@ -13,6 +13,7 @@
 #define JTAG_INSTR_WRITE_JDCR_READ_JDSR 0x28 /* 0b0101000 */
 #define JTAG_INSTR_WRITE_JISB_READ_JDSR 0x38 /* 0b0111000 */
 #define JTAG_INSTR_WRITE_READ_DBDR 0x58 /* 0b1011000 */
+#define JTAG_INSTR_CORE_RELOAD 0x78 /* 0b1111000, is used for preventing a JTAG bug with the core swintching */
 
 #define JDSR_PSP_MASK (1 << (31 - 31))
 
@@ -58,6 +59,8 @@
 #define MAGIC_RANDOM_VALUE_1 0x396F965C
 #define MAGIC_RANDOM_VALUE_2 0x44692D7E
 
+#define ERROR_MEMORY_AT_STACK (-99)
+
 struct ppc476fs_common {
 	struct reg *all_regs[ALL_REG_COUNT];
 	struct reg *gpr_regs[GPR_REG_COUNT];
@@ -74,6 +77,10 @@ struct ppc476fs_common {
 	uint32_t saved_R2;
 	uint32_t saved_LR;
 	uint64_t saved_F0;
+};
+
+struct ppc476fs_tap_ext {
+	int last_coreid; // -1 if the last core id is unknown
 };
 
 static int ppc476fs_get_gen_reg(struct reg *reg);
@@ -93,12 +100,17 @@ static const struct reg_arch_type ppc476fs_fpu_reg_type = {
 };
 
 static const uint32_t coreid_mask[4] = {
-	0x4, 0x6
+	0x5, 0x6
 };
 
 static inline struct ppc476fs_common *target_to_ppc476fs(struct target *target)
 {
 	return target->arch_info;
+}
+
+static inline struct ppc476fs_tap_ext *target_to_ppc476fs_tap_ext(struct target *target)
+{
+	return target->tap->priv;
 }
 
 static inline uint32_t get_reg_value_32(struct reg *reg) {
@@ -111,6 +123,7 @@ static inline void set_reg_value_32(struct reg *reg, uint32_t value) {
 
 static int jtag_read_write_register(struct target *target, uint32_t instr_without_coreid, uint32_t valid_bit, uint32_t write_data, uint32_t *read_data)
 {
+	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
 	struct scan_field field;
 	struct scan_field fields[2];
 	uint8_t instr_buffer[4];
@@ -118,6 +131,17 @@ static int jtag_read_write_register(struct target *target, uint32_t instr_withou
 	uint8_t data_in_buffer[4];
 	uint8_t valid_buffer[4];
 	int ret;
+
+	// !!! IMPORTANT
+	// prevent the JTAG core switching bug
+	if (tap_ext->last_coreid != target->coreid) {
+		buf_set_u32(instr_buffer, 0, target->tap->ir_length, JTAG_INSTR_CORE_RELOAD | coreid_mask[target->coreid]);
+		field.num_bits = target->tap->ir_length;
+		field.out_value = instr_buffer;
+		field.in_value = NULL;
+		jtag_add_ir_scan(target->tap, &field, TAP_IDLE);
+		tap_ext->last_coreid = target->coreid;
+	}
 
 	buf_set_u32(instr_buffer, 0, target->tap->ir_length, instr_without_coreid | coreid_mask[target->coreid]);
 	field.num_bits = target->tap->ir_length;
@@ -328,7 +352,8 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value)
 	return ERROR_OK;
 }
 
-static int test_memory_at_stack(struct target *target)
+// the function uses R2 register and does not restore one
+static int test_memory_at_stack_internal(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t value_1;
@@ -336,7 +361,7 @@ static int test_memory_at_stack(struct target *target)
 	int ret;
 
 	if ((ppc476fs->saved_R1 < 8) || ((ppc476fs->saved_R1 & 0x3) != 0)) // check the stack pointer
-		return ERROR_FAIL;
+		return ERROR_MEMORY_AT_STACK;
 
 	// set magic values to memory
 	ret = write_gpr_reg(target, 2, MAGIC_RANDOM_VALUE_1);
@@ -366,16 +391,27 @@ static int test_memory_at_stack(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
-
 	// check the magic values
 	if ((value_1 != MAGIC_RANDOM_VALUE_1) && (value_2 != MAGIC_RANDOM_VALUE_2))
-		return ERROR_FAIL;
+		return ERROR_MEMORY_AT_STACK;
 
 	return ERROR_OK;
+}
+
+static int test_memory_at_stack(struct target *target)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret1;
+	int ret2;
+
+	ret1 = test_memory_at_stack_internal(target);
+
+	// restore R2
+	ret2 = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret2 != ERROR_OK)
+		return ret2;
+
+	return ret1;
 }
 
 static int read_required_gen_regs(struct target *target)
@@ -528,6 +564,23 @@ static int read_required_fpu_regs(struct target *target)
 	}
 
 	ret = test_memory_at_stack(target);
+	if (ret == ERROR_MEMORY_AT_STACK) {
+		LOG_WARNING("cannot read FPU registers because of the stark pointer, CoreID: %i", target->coreid);
+		for (i = 0; i < FPR_REG_COUNT; ++i) {
+			reg = ppc476fs->fpr_regs[i];
+			if (!reg->valid) {
+				memset(reg->value, 0, 8);
+				reg->valid = true;
+				reg->dirty = false;
+			}
+		}
+		if (!ppc476fs->FPSCR_reg->valid) {
+			set_reg_value_32(ppc476fs->FPSCR_reg, 0);
+			ppc476fs->FPSCR_reg->valid = true;
+			ppc476fs->FPSCR_reg->dirty = false;
+		}
+		return ERROR_OK;
+	}
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -639,6 +692,7 @@ int write_dirty_gen_regs(struct target *target)
 		LR_used = false;
 	}
 
+	// restore LR if it is needed
 	if (LR_used) {
 		R2_used = true;
 		ret = write_spr_reg(target, SPR_REG_NUM_LR, ppc476fs->saved_LR);
@@ -695,6 +749,15 @@ int write_dirty_fpu_regs(struct target *target)
 	assert((get_reg_value_32(ppc476fs->MSR_reg) & MSR_FP_MASK) != 0);
 
 	ret = test_memory_at_stack(target);
+	if (ret == ERROR_MEMORY_AT_STACK) {
+		LOG_WARNING("cannot write FPU registers because of the stark pointer, CoreID: %i", target->coreid);
+		for (i = 0; i < FPR_REG_COUNT; ++i) {
+			reg = ppc476fs->fpr_regs[i];
+			reg->dirty = false;
+		}
+		ppc476fs->FPSCR_reg->dirty = false;
+		return ERROR_OK;
+	}
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -990,7 +1053,7 @@ static int set_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 	ret = write_spr_reg(target, SPR_REG_NUM_IAC_BASE + iac_index, (uint32_t)breakpoint->address);
 	if (ret != ERROR_OK)
-		return ret;	
+		return ret;
 	ret = write_DBCR0(target, ppc476fs->DBCR0_value | iac_mask);
 	if (ret != ERROR_OK)
 		return ret;
@@ -1028,7 +1091,7 @@ static void break_points_invalidate(struct target *target)
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
 
-	ppc476fs->DBCR0_value &= ~DBCR0_IACX_MASK;
+	assert((ppc476fs->DBCR0_value & DBCR0_IACX_MASK) == 0);
 
 	while (bp != NULL) {
 		bp->set = 0;
@@ -1133,12 +1196,14 @@ static int save_state_and_init_debug(struct target *target)
 
 static int reset_and_halt(struct target *target)
 {
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	uint32_t value_JDSR;
 	int i;
 	int ret;
 	
 	target->state = TARGET_RESET;
 	regs_status_invalidate(target); // if an error occurs
+	ppc476fs->DBCR0_value = 0;
 	break_points_invalidate(target); // if an error occurs
 
 	ret = write_JDCR(target, JDCR_RESET_MASK);
@@ -1171,14 +1236,14 @@ static int reset_and_halt(struct target *target)
 
 static int examine_internal(struct target *target)
 {
+	struct ppc476fs_tap_ext *tap_ext = target_to_ppc476fs_tap_ext(target);
 	uint32_t JDSR_value;
 	bool is_running;
 	int ret;
 
-	ret = read_JDSR(target, &JDSR_value); // supposedly can return a wrong result
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_JDSR(target, &JDSR_value); // repeat reading
+	tap_ext->last_coreid = -1;
+
+	ret = read_JDSR(target, &JDSR_value);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1275,6 +1340,8 @@ int ppc476fs_arch_state(struct target *target)
 static int ppc476fs_halt(struct target *target)
 {
 	int ret;
+
+	LOG_DEBUG("ppc476fs_halt, CoreID: %i", target->coreid);
 
 	if (target->state == TARGET_HALTED) {
 		LOG_WARNING("target was already halted");
@@ -1551,10 +1618,11 @@ static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *bre
 	bp = target->breakpoints;
 	bp_count = 0;
 	while (bp != NULL) {
-		++bp_count;
+		if (bp != breakpoint) // do not count the added breakpoint, it may be in the list
+			++bp_count;
 		bp = bp->next;
 	}
-	if (bp_count > 4) // this breakpoint is in the list so '>' not '='
+	if (bp_count == 4)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 
 	breakpoint->set = 0;
@@ -1608,6 +1676,16 @@ static int ppc476fs_init_target(struct command_context *cmd_ctx, struct target *
 {
 	build_reg_caches(target);
 
+	if (target->tap->priv == NULL) {
+		struct ppc476fs_tap_ext *tap_ext = malloc(sizeof(struct ppc476fs_tap_ext));
+		tap_ext->last_coreid = -1;
+		target->tap->priv = tap_ext;
+		LOG_DEBUG("The TAP extera struct has been created, CoreID: %i", target->coreid);
+	}
+	else {
+		LOG_DEBUG("The TAP extra struct has already been created, CoreID: %i", target->coreid);
+	}
+
 	return ERROR_OK;
 }
 
@@ -1619,7 +1697,7 @@ static int ppc476fs_examine(struct target *target)
 		return ret;
 	}
 
-   	target_set_examined(target);
+	target_set_examined(target);
 
 	return ERROR_OK;
 }
