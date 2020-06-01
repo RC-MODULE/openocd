@@ -3729,7 +3729,7 @@ static int handle_bp_command_list(struct command_invocation *cmd)
 	while (breakpoint) {
 		if (breakpoint->type == BKPT_SOFT) {
 			char *buf = buf_to_str(breakpoint->orig_instr,
-					breakpoint->length, 16);
+					breakpoint->length * 8, 16);
 			command_print(cmd, "IVA breakpoint: " TARGET_ADDR_FMT ", 0x%x, %i, 0x%s",
 					breakpoint->address,
 					breakpoint->length,

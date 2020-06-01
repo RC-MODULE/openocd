@@ -12,8 +12,7 @@
 #include <helper/bits.h>
 
 // uncomment the lines below to see the debug messages without turning on a debug mode
-/*
-#undef LOG_DEBUG
+/* #undef LOG_DEBUG
 #define LOG_DEBUG(expr ...) \
 	do { \
 		printf("D:%i:%s: ", __LINE__, __func__); \
@@ -50,6 +49,7 @@
 #define SPR_REG_NUM_MMUCR 946
 
 #define DBCR0_EDM_MASK BIT(63 - 32)
+#define DBCR0_TRAP_MASK BIT(63 - 39)
 #define DBCR0_IAC1_MASK BIT(63 - 40)
 #define DBCR0_IACX_MASK (0xF << (63 - 43))
 #define DBCR0_DAC1R_MASK BIT(63 - 44)
@@ -143,6 +143,8 @@
 #define TLB_PARAMS_MASK_EN BIT(11)
 #define TLB_PARAMS_MASK_UXWR BIT(12)
 #define TLB_PARAMS_MASK_SXWR BIT(13)
+
+#define TRAP_INSTRUCTION_CODE 0x7FE00008
 
 struct tlb_hw_record {
 	uint32_t data[3]; // if the 'valid' bit is zero, all other data are undefined
@@ -478,6 +480,56 @@ static int write_fpr_reg(struct target *target, int reg_num, uint64_t value)
 }
 
 // the function uses R2 register and does not restore one
+static int write_DBCR0(struct target *target, uint32_t data)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	int ret;
+
+	ret = write_spr_reg(target, SPR_REG_NUM_DBCR0, data);
+	if (ret != ERROR_OK)
+		return ret;
+
+	ppc476fs->DBCR0_value = data;
+
+	return ERROR_OK;
+}
+
+static int clear_DBSR(struct target *target)
+{
+	return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
+}
+
+// the function uses R2 register and does not restore one
+static int read_MSR(struct target *target, uint32_t *value)
+{
+	int ret;
+
+	ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 2, value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+// the function uses R2 register and does not restore one
+static int write_MSR(struct target *target, uint32_t value)
+{
+	int ret;
+
+	ret = write_gpr_reg(target, 2, value);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x7C400124); // mtmsr R2
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+// the function uses R2 register and does not restore one
 static int test_memory_at_stack_internal(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
@@ -595,10 +647,7 @@ static int read_required_gen_regs(struct target *target)
 
 	if (!ppc476fs->MSR_reg->valid) {
 		R2_used = true;
-		ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
-		if (ret != ERROR_OK)
-			return ret;
-		ret = read_gpr_reg(target, 2, ppc476fs->MSR_reg->value);
+		ret = read_MSR(target, ppc476fs->MSR_reg->value);
 		if (ret != ERROR_OK)
 			return ret;
 		ppc476fs->MSR_reg->valid = true;
@@ -782,10 +831,7 @@ int write_dirty_gen_regs(struct target *target)
 
 	if (ppc476fs->MSR_reg->dirty) {
 		R2_used = true;
-		ret = write_gpr_reg(target, 2, get_reg_value_32(ppc476fs->MSR_reg));
-		if (ret != ERROR_OK)
-			return ret;
-		ret = stuff_code(target, 0x7C400124); // mtmsr R2
+		ret = write_MSR(target, get_reg_value_32(ppc476fs->MSR_reg));
 		if (ret != ERROR_OK)
 			return ret;
 	 	ppc476fs->MSR_reg->dirty = false;
@@ -926,7 +972,7 @@ int write_dirty_fpu_regs(struct target *target)
 	return ERROR_OK;
 }
 
-static void regs_status_invalidate(struct target *target)
+static void invalidate_regs_status(struct target *target)
 {
 	struct reg_cache *cache = target->reg_cache;
 
@@ -934,26 +980,6 @@ static void regs_status_invalidate(struct target *target)
 		register_cache_invalidate(cache);
 		cache = cache->next;
 	}
-}
-
-// the function uses R2 register and does not restore one
-static int write_DBCR0(struct target *target, uint32_t data)
-{
-	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
-	int ret;
-
-	ret = write_spr_reg(target, SPR_REG_NUM_DBCR0, data);
-	if (ret != ERROR_OK)
-		return ret;
-
-	ppc476fs->DBCR0_value = data;
-
-	return ERROR_OK;
-}
-
-static int clear_DBSR(struct target *target)
-{
-	return write_JDCR(target, JDCR_STO_MASK | JDCR_RSDBSR_MASK);
 }
 
 static int ppc476fs_get_gen_reg(struct reg *reg)
@@ -988,10 +1014,7 @@ static int ppc476fs_set_gen_reg(struct reg *reg, uint8_t *buf)
 			if (ret != ERROR_OK)
 				return ret;
 			// write MSR to the CPU
-			ret = write_gpr_reg(target, 2, MSR_new_value);
-			if (ret != ERROR_OK)
-				return ret;
-			ret = stuff_code(target, 0x7C400124); // mtmsr R2
+			ret = write_MSR(target, MSR_new_value);
 			if (ret != ERROR_OK)
 				return ret;
 			ret = write_gpr_reg(target, 2, ppc476fs->saved_R2); // restore R2
@@ -1133,7 +1156,8 @@ static void build_reg_caches(struct target *target)
 	target->reg_cache = gen_cache;
 }
 
-static int unset_breakpoint(struct target *target, struct breakpoint *bp)
+// the function uses R2 register and does not restore one
+static int unset_hw_breakpoint(struct target *target, struct breakpoint *bp)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int iac_index = 0;
@@ -1157,23 +1181,83 @@ static int unset_breakpoint(struct target *target, struct breakpoint *bp)
 	if (ret != ERROR_OK)
 		return ret;
 
-	// restore R2
-	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
-	if (ret != ERROR_OK)
-		return ret;
-
 	bp->set = 0;
 
 	return ERROR_OK;
 }
 
-// the function uses R2 register and does not restore one
-static int set_breakpoint(struct target *target, struct breakpoint *bp)
+// the function uses R1 and R2 registers and does not restore them
+static int unset_soft_breakpoint(struct target *target, struct breakpoint *bp)
+{
+	uint32_t instr_saved;
+	uint32_t test_value;
+	int ret;
+
+	assert(bp->set != 0);
+
+	memcpy(&instr_saved, bp->orig_instr, 4);
+
+	ret = write_gpr_reg(target, 1, (uint32_t)bp->address);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = write_gpr_reg(target, 2, instr_saved);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x90410000); // stw %R2, 0(%R1)
+	if (ret != ERROR_OK)
+		return ret;
+
+	// test
+	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 2, &test_value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (test_value == instr_saved)
+		bp->set = 0;
+	else
+		LOG_WARNING("soft breakpoint cannot be removed at address 0x%08X", (uint32_t)bp->address);
+
+	return ERROR_OK;
+}
+
+static int unset_all_soft_breakpoints(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
+	struct breakpoint *bp;
 	int ret;
+
+	bp = target->breakpoints;
+	while (bp != NULL) {
+		if (bp->type == BKPT_SOFT) {
+			ret = unset_soft_breakpoint(target, bp);
+			if (ret != ERROR_OK)
+				return ret;
+		}
+	}
+
+	// restore R1
+	ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+	if (ret != ERROR_OK)
+		return ret;
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
+	if (ret != ERROR_OK)
+		return ret;
+
+	return ERROR_OK;
+}
+
+// the function uses R2 register and does not restore one
+static int set_hw_breakpoint(struct target *target, struct breakpoint *bp)
+{
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int iac_index = 0;
 	uint32_t iac_mask;
+	int ret;
 
 	assert(bp->set == 0);
 
@@ -1199,21 +1283,77 @@ static int set_breakpoint(struct target *target, struct breakpoint *bp)
 	return ERROR_OK;
 }
 
+// the function uses R1 and R2 registers and does not restore them
+static int set_soft_breakpoint(struct target *target, struct breakpoint *bp)
+{
+	int ret;
+	uint32_t instr_saved;
+	uint32_t test_value;
+
+	ret = write_gpr_reg(target, 1, (uint32_t)bp->address);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 2, &instr_saved);
+	if (ret != ERROR_OK)
+		return ret;
+
+	memcpy(bp->orig_instr, &instr_saved, 4);
+
+	ret = write_gpr_reg(target, 2, TRAP_INSTRUCTION_CODE);
+	if (ret != ERROR_OK)
+		return ret;
+	ret = stuff_code(target, 0x90410000); // stw %R2, 0(%R1)
+	if (ret != ERROR_OK)
+		return ret;
+
+	// test
+	ret = stuff_code(target, 0x80410000); // lwz %R2, 0(%R1)
+	if (ret != ERROR_OK)
+		return ret;
+	ret = read_gpr_reg(target, 2, &test_value);
+	if (ret != ERROR_OK)
+		return ret;
+
+	if (test_value == TRAP_INSTRUCTION_CODE)
+		bp->set = 1;
+	else
+		LOG_WARNING("soft breakpoint cannot be set at address 0x%08X", (uint32_t)bp->address);
+
+	return ERROR_OK;
+}
+
 static int enable_breakpoints(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
+	bool R1_used = false;
 	bool R2_used = false;
 	int ret;
 
 	while (bp != NULL) {
 		if (bp->set == 0) {
-			R2_used = true;
-			ret = set_breakpoint(target, bp);
+			if (bp->type == BKPT_HARD) {
+				R2_used = true;
+				ret = set_hw_breakpoint(target, bp);
+			} else {
+				R1_used = true;
+				R2_used = true;
+				ret = set_soft_breakpoint(target, bp);
+			}
 			if (ret != ERROR_OK)
 				return ret;
 		}
 		bp = bp->next;
+	}
+
+	// restore R1 if it is needed
+	if (R1_used) {
+		ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+		if (ret != ERROR_OK)
+			return ret;
 	}
 
 	// restore R2 if it is needed
@@ -1226,7 +1366,8 @@ static int enable_breakpoints(struct target *target)
 	return ERROR_OK;
 }
 
-static void breakpoints_invalidate(struct target *target)
+// the DAC fields in DBCR0 register must be cleared before the function call
+static void invalidate_hw_breakpoints(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct breakpoint *bp = target->breakpoints;
@@ -1234,9 +1375,30 @@ static void breakpoints_invalidate(struct target *target)
 	assert((ppc476fs->DBCR0_value & DBCR0_IACX_MASK) == 0);
 
 	while (bp != NULL) {
-		bp->set = 0;
+		if (bp->type == BKPT_HARD)
+			bp->set = 0;
 		bp = bp->next;
 	}
+}
+
+static int add_hw_breakpoint(struct target *target, struct breakpoint *breakpoint)
+{
+	struct breakpoint *bp;
+	int bp_count;
+
+	bp = target->breakpoints;
+	bp_count = 0;
+	while (bp != NULL) {
+		if (bp->type != BKPT_HARD)
+			continue;
+		if (bp != breakpoint) // do not count the added breakpoint, it may be in the list
+			++bp_count;
+		bp = bp->next;
+	}
+	if (bp_count == HW_BP_NUMBER)
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+
+	return ERROR_OK;
 }
 
 static int unset_watchpoint(struct target *target, struct watchpoint *wp)
@@ -1352,7 +1514,7 @@ static int enable_watchpoints(struct target *target)
 	return ERROR_OK;
 }
 
-static void watchpoints_invalidate(struct target *target)
+static void invalidate_watchpoints(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	struct watchpoint *wp = target->watchpoints;
@@ -1365,7 +1527,7 @@ static void watchpoints_invalidate(struct target *target)
 	}
 }
 
-static void tlb_cache_invalidate(struct target *target)
+static void invalidate_tlb_cache(struct target *target)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int i;
@@ -1378,8 +1540,8 @@ static int save_state(struct target *target)
 {
 	int ret;
 
-	regs_status_invalidate(target);
-	tlb_cache_invalidate(target);
+	invalidate_regs_status(target);
+	invalidate_tlb_cache(target);
 
 	ret = read_required_gen_regs(target);
 	if (ret != ERROR_OK)
@@ -1410,8 +1572,8 @@ static int restore_state(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
-	regs_status_invalidate(target);
-	tlb_cache_invalidate(target);
+	invalidate_regs_status(target);
+	invalidate_tlb_cache(target);
 
 	return ERROR_OK;
 }
@@ -1451,11 +1613,11 @@ static int save_state_and_init_debug(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
-	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_FT_MASK);
+	ret = write_DBCR0(target, DBCR0_EDM_MASK | DBCR0_TRAP_MASK | DBCR0_FT_MASK);
 	if (ret != ERROR_OK)
 		return ret;
-	breakpoints_invalidate(target);
-	watchpoints_invalidate(target);
+	invalidate_hw_breakpoints(target);
+	invalidate_watchpoints(target);
 
 	ret = write_spr_reg(target, SPR_REG_NUM_DBCR1, 0);
 	if (ret != ERROR_OK)
@@ -1482,12 +1644,14 @@ static int reset_and_halt(struct target *target)
 	uint32_t value_JDSR;
 	int i;
 	int ret;
+
+	unset_all_soft_breakpoints(target); // ignore return value
 	
 	target->state = TARGET_RESET;
-	regs_status_invalidate(target); // if an error occurs
+	invalidate_regs_status(target); // if an error occurs
 	ppc476fs->DBCR0_value = 0;
-	breakpoints_invalidate(target); // if an error occurs
-	watchpoints_invalidate(target); // if an error occurs
+	invalidate_hw_breakpoints(target); // if an error occurs
+	invalidate_watchpoints(target); // if an error occurs
 
 	ret = write_JDCR(target, JDCR_RESET_MASK);
 	if (ret != ERROR_OK)
@@ -1790,7 +1954,7 @@ static int load_uncached_tlb(struct target *target, int index_way)
 	return ERROR_OK;
 }
 
-static int tlb_record_compar(const void *p1, const void *p2)
+static int compare_tlb_record(const void *p1, const void *p2)
 {
 	const struct tlb_sort_record *r1 = p1;
 	const struct tlb_sort_record *r2 = p2;
@@ -1869,14 +2033,11 @@ static void print_tlb_table_record(struct command_invocation *cmd, int index_way
 	command_print(CMD, "%s", buffer);
 }
 
-static int phys_mem_init(struct target *target, struct phys_mem_state *state)
+static int init_phys_mem(struct target *target, struct phys_mem_state *state)
 {
 	int ret;
 
-	ret = stuff_code(target, 0x7C4000A6); // mfmsr R2
-	if (ret != ERROR_OK)
-		return ret;
-	ret = read_gpr_reg(target, 2, &state->saved_MSR);
+	ret = read_MSR(target, &state->saved_MSR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1893,10 +2054,7 @@ static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 		return ret;
 
 	// set MSR
-	ret = write_gpr_reg(target, 2, state->saved_MSR | MSR_PR_MASK | MSR_DS_MASK); // problem mode and TS=1
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x7C400124); // mtmsr R2
+	ret = write_MSR(target, state->saved_MSR | MSR_PR_MASK | MSR_DS_MASK); // problem mode and TS=1
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1918,7 +2076,7 @@ static int phys_mem_init(struct target *target, struct phys_mem_state *state)
 	return ERROR_OK;
 }
 
-static int phys_mem_restore(struct target *target, struct phys_mem_state *state)
+static int restore_phys_mem(struct target *target, struct phys_mem_state *state)
 {
 	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
@@ -1944,10 +2102,7 @@ static int phys_mem_restore(struct target *target, struct phys_mem_state *state)
 		return ret;
 
 	// restore MSR
-	ret = write_gpr_reg(target, 2, state->saved_MSR);
-	if (ret != ERROR_OK)
-		return ret;
-	ret = stuff_code(target, 0x7C400124); // mtmsr R2
+	ret = write_MSR(target, state->saved_MSR);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -1969,7 +2124,7 @@ static int phys_mem_restore(struct target *target, struct phys_mem_state *state)
 	return ERROR_OK;
 }
 
-static int phys_mem_access(struct target *target, uint32_t new_ERPN_RPN)
+static int access_phys_mem(struct target *target, uint32_t new_ERPN_RPN)
 {
 	struct tlb_hw_record hw;
 	int ret;
@@ -2185,7 +2340,7 @@ static int handle_tlb_dump_command_internal(struct command_invocation *cmd, stru
 		}
 	}
 
-	qsort(records, record_count, sizeof(struct tlb_sort_record), tlb_record_compar);
+	qsort(records, record_count, sizeof(struct tlb_sort_record), compare_tlb_record);
 
 	print_tlb_table_header(CMD);
 	for (i = 0; i < record_count; ++i) {
@@ -2407,7 +2562,7 @@ static int handle_tlb_drop_all_command_internal(struct target *target)
 	if (ret != ERROR_OK)
 		return ret;
 
-	tlb_cache_invalidate(target);
+	invalidate_tlb_cache(target);
 
 	memset(&hw, 0, sizeof hw);
 
@@ -2740,36 +2895,34 @@ static int ppc476fs_write_memory(struct target *target, target_addr_t address, u
 
 static int ppc476fs_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
-	struct breakpoint *bp;
-	int bp_count;
+	int ret;
 
 	LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	if (breakpoint->type != BKPT_HARD)
-		return ERROR_TARGET_FAILURE; // only hardware points	
 	if (breakpoint->length != 4)
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
-	bp = target->breakpoints;
-	bp_count = 0;
-	while (bp != NULL) {
-		if (bp != breakpoint) // do not count the added breakpoint, it may be in the list
-			++bp_count;
-		bp = bp->next;
-	}
-	if (bp_count == HW_BP_NUMBER)
-		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	if ((breakpoint->address & 0x3) != 0)
+		return ERROR_TARGET_UNALIGNED_ACCESS;
 
 	breakpoint->set = 0;
+	memset(breakpoint->orig_instr, 0, 4);
+
+	if (breakpoint->type == BKPT_HARD) {
+		ret = add_hw_breakpoint(target, breakpoint);
+		if (ret != ERROR_OK)
+			return ret;
+	}
 
 	return ERROR_OK;
 }
 
 static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *breakpoint)
 {
+	struct ppc476fs_common *ppc476fs = target_to_ppc476fs(target);
 	int ret;
 
 	LOG_DEBUG("coreid=%i, address=0x%lX, type=%i, length=0x%X", target->coreid, breakpoint->address, breakpoint->type, breakpoint->length);
@@ -2780,7 +2933,22 @@ static int ppc476fs_remove_breakpoint(struct target *target, struct breakpoint *
 	if (breakpoint->set == 0)
 		return ERROR_OK;
 
-	ret = unset_breakpoint(target, breakpoint);
+	if (breakpoint->type == BKPT_HARD) {
+		ret = unset_hw_breakpoint(target, breakpoint);
+		if (ret != ERROR_OK)
+			return ret;
+	} else {
+		ret = unset_soft_breakpoint(target, breakpoint);
+		if (ret != ERROR_OK)
+			return ret;
+		// restore R1
+		ret = write_gpr_reg(target, 1, ppc476fs->saved_R1);
+		if (ret != ERROR_OK)
+			return ret;
+	}
+
+	// restore R2
+	ret = write_gpr_reg(target, 2, ppc476fs->saved_R2);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2794,6 +2962,8 @@ static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *wat
 
 	LOG_DEBUG("coreid=%i, address=0x%08lX, rw=%i, length=%u, value=0x%08X, mask=0x%08X",
 		target->coreid, watchpoint->address, watchpoint->rw, watchpoint->length, watchpoint->value, watchpoint->mask);
+
+	watchpoint->set = 0;
 
 	if ((watchpoint->length != 1) && (watchpoint->length != 2) && (watchpoint->length != 4))
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
@@ -2810,8 +2980,6 @@ static int ppc476fs_add_watchpoint(struct target *target, struct watchpoint *wat
 	}
 	if (wp_count == WP_NUMBER)
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-
-	watchpoint->set = 0;
 
 	return ERROR_OK;
 }
@@ -2922,7 +3090,7 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 
 	memset(buffer, 0, size * count); // clear result buffer
 
-	ret = phys_mem_init(target, &state);
+	ret = init_phys_mem(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2931,7 +3099,7 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 
 		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
 		if (new_ERPN_RPN != last_ERPN_RPN) {
-			ret = phys_mem_access(target, new_ERPN_RPN);
+			ret = access_phys_mem(target, new_ERPN_RPN);
 			if (ret != ERROR_OK)
 				return ret;
 			last_ERPN_RPN = new_ERPN_RPN;
@@ -2946,7 +3114,7 @@ static int ppc476fs_read_phys_memory(struct target *target, target_addr_t addres
 	}
 
 	// restore state
-	ret = phys_mem_restore(target, &state);
+	ret = restore_phys_mem(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2977,7 +3145,7 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 	}
 
-	ret = phys_mem_init(target, &state);
+	ret = init_phys_mem(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -2986,7 +3154,7 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 
 		new_ERPN_RPN = (address >> 12) & 0x3FFC0000;
 		if (new_ERPN_RPN != last_ERPN_RPN) {
-			ret = phys_mem_access(target, new_ERPN_RPN);
+			ret = access_phys_mem(target, new_ERPN_RPN);
 			if (ret != ERROR_OK)
 				return ret;
 			last_ERPN_RPN = new_ERPN_RPN;
@@ -3001,7 +3169,7 @@ static int ppc476fs_write_phys_memory(struct target *target, target_addr_t addre
 	}
 
 	// restore state
-	ret = phys_mem_restore(target, &state);
+	ret = restore_phys_mem(target, &state);
 	if (ret != ERROR_OK)
 		return ret;
 
@@ -3141,15 +3309,12 @@ COMMAND_HANDLER(ppc476fs_handle_status_command)
 COMMAND_HANDLER(ppc476fs_handle_jtag_speed_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	time_t current_time = time(NULL);
+	int64_t start_time = timeval_ms();
 	uint32_t count = 0;
 	uint32_t dummy_data;
 	int ret;
 
-	while (time(NULL) == current_time) ; // wait new second
-	current_time = time(NULL);
-
-	while (time(NULL) == current_time) {
+	while (timeval_ms() - start_time < 1000) {
 		ret = read_DBDR(target, &dummy_data);
 		if (ret != ERROR_OK) {
 			command_print(CMD, "JTAG communication error");
