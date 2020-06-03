@@ -107,7 +107,7 @@ extern struct target_type nds32_v3m_target;
 extern struct target_type or1k_target;
 extern struct target_type quark_x10xx_target;
 extern struct target_type quark_d20xx_target;
-extern struct target_type ppc476fs_target;
+extern struct target_type ppc476fp_target;
 extern struct target_type stm8_target;
 extern struct target_type riscv_target;
 extern struct target_type mem_ap_target;
@@ -144,7 +144,7 @@ static struct target_type *target_types[] = {
 	&or1k_target,
 	&quark_x10xx_target,
 	&quark_d20xx_target,
-	&ppc476fs_target,
+	&ppc476fp_target,
 	&stm8_target,
 	&riscv_target,
 	&mem_ap_target,
