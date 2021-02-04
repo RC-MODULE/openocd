@@ -618,11 +618,11 @@ int arm11_run_instr_data_to_core_noack_inner_default(struct jtag_tap *tap,
 				error_count++;
 		}
 
-		if (error_count > 0) {
-			LOG_ERROR("%u words out of %u not transferred",
-				error_count, readiesNum);
-			retval = ERROR_FAIL;
-		}
+//		if (error_count > 0) {
+//			LOG_ERROR("%u words out of %u not transferred",
+//				error_count, readiesNum);
+//			retval = ERROR_FAIL;
+//		}
 	}
 	free(Readies);
 
